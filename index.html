@@ -26,6 +26,7 @@
   color-scheme: light;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }   /* 個別の display 指定より優先して確実に隠す */
 html, body { height: 100%; margin: 0; }
 body { background: #e5e3df; color: var(--ink); font: 14px/1.5 var(--font); overflow: hidden; }
 button, input, select { font: inherit; color: inherit; }
@@ -275,10 +276,10 @@ body:not(.collapsed) .leaflet-bottom.leaflet-left { left: var(--panel-w); }
 <div id="login" hidden>
   <form id="loginForm">
     <h2>管理者の合言葉</h2>
-    <p>データをサーバーに保存するときだけ必要です</p>
+    <p>データ更新・終了店舗の登録などの管理者メニューを使うには、管理者の合言葉が必要です</p>
     <input type="password" id="pw" autocomplete="current-password" aria-label="管理者の合言葉" required>
     <label><input type="checkbox" id="remember" checked> このPCで記憶する</label>
-    <button class="btn" type="submit" id="loginBtn">保存する</button>
+    <button class="btn" type="submit" id="loginBtn">開く</button>
     <button type="button" class="linkbtn" id="loginCancel">やめる</button>
     <div id="loginErr" role="alert"></div>
   </form>
@@ -877,7 +878,7 @@ function openDetail(s, move = true) {
       ${row("clock", fullDate(lastShipOf(s)), "最終出荷日")}
     </div></div>` : ""}
     ${productBlock(s)}
-    ${location.hash === "#admin" ? adminBox(s) : ""}`;
+    ${isAdmin && location.hash === "#admin" ? adminBox(s) : ""}`;
   wireAdminBox(s);
   $("detailview").querySelectorAll("[data-prod]").forEach((b) => b.onclick = () => selectProduct(b.dataset.prod));
   $("listview").hidden = true; $("detailview").hidden = false; $("detailview").scrollTop = 0;
@@ -927,14 +928,35 @@ function locate() {
 }
 
 /* ===================== 管理者：データ更新（URL末尾に #admin） ===================== */
-const syncAdmin = () => { $("admin").hidden = location.hash !== "#admin"; };
-addEventListener("hashchange", syncAdmin); syncAdmin();
+// 管理者モード：URL の末尾が #admin で、かつ管理者の合言葉を確かめたときだけ、データ更新と管理者メニューを出す。
+// （サーバー未設定の確認用表示では合言葉なしで使える）
+let isAdmin = !API_URL;
+function syncAdmin() {
+  const want = location.hash === "#admin";
+  $("admin").hidden = !(want && isAdmin);
+  if (want && !isAdmin) {
+    password ||= pwStore.get();
+    if (password) verifyAdmin(); else showLogin("");
+  }
+  if (!want) $("login").hidden = true;
+  if (state.sel && !$("detailview").hidden) openDetail(state.sel, false);
+}
+async function verifyAdmin() {
+  try { await call("checkAdmin"); isAdmin = true; syncAdmin(); }
+  catch (e) { if (e.auth) showLogin(e.message); else toast("管理者の合言葉を確認できませんでした：" + e.message); }
+}
+const leaveAdmin = () => history.replaceState(null, "", location.pathname + location.search);
+addEventListener("hashchange", syncAdmin);
 
 async function importFile(file) {
   const msg = $("adminmsg"), prog = $("prog");
   $("save").disabled = true; msg.textContent = "読み込み中…";
   try {
     const { header, objs, preamble } = readTable(await file.arrayBuffer());
+    // ピッキングリストなどは「売上数」が無く、1コース・1日分だけなので取り込まない（他のコースの出荷を消してしまうため）
+    if (header.includes("商品名1") && !header.includes("売上数")) {
+      throw new Error("このファイルは売上明細ではありません（ピッキングリストなど）。基幹システムの「売上明細問合せ」を全コース分で出力して取り込んでください。");
+    }
     if (header.includes("商品名1") || header.includes("商品名")) return importSales(file, header, objs, preamble);
     const isMaster = header.includes("得意先名1");
     const stores = objs.map((o) => isMaster ? fromMaster(o) : fromPublished(o, header)).filter(Boolean);
@@ -1087,6 +1109,7 @@ async function call(fn, ...args) {
   const data = await res.json();
   if (data.auth === false) {   // 管理者の合言葉が違う（保存のときだけ起きる）
     pwStore.clear(); password = "";
+    isAdmin = !API_URL;
     throw Object.assign(new Error(data.error || "管理者の合言葉が違います"), { auth: true });
   }
   if (!data.ok) throw new Error(data.error || "不明なエラー");
@@ -1107,15 +1130,21 @@ $("loginForm").addEventListener("submit", async (e) => {
     await call("checkAdmin");
     pwStore.set(password, $("remember").checked);
     $("login").hidden = true;
-    savePending();
+    isAdmin = true;
+    syncAdmin();
+    if (Object.keys(state.pending).length) savePending();   // 保存の途中で聞かれた場合は、そのまま保存を続ける
   } catch (err) {
     $("loginErr").textContent = err.message;
   } finally {
     $("loginBtn").disabled = false;
   }
 });
-$("loginCancel").onclick = () => { $("login").hidden = true; };
-$("logout").onclick = () => { pwStore.clear(); password = ""; toast("このPCの管理者の合言葉を消しました"); };
+$("loginCancel").onclick = () => { $("login").hidden = true; if (!isAdmin) leaveAdmin(); };
+$("logout").onclick = () => {
+  pwStore.clear(); password = ""; isAdmin = !API_URL;
+  leaveAdmin(); syncAdmin();
+  toast("このPCの管理者の合言葉を消しました");
+};
 
 /* ===================== 起動：店舗・使用商品を読み込む ===================== */
 const tableToObjs = (t) => {
@@ -1157,6 +1186,7 @@ async function start() {
 
 $("logout").hidden = !API_URL;
 start();   // 地図の閲覧に合言葉は不要
+syncAdmin();
 </script>
 </body>
 </html>
