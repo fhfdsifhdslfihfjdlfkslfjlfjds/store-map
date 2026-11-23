@@ -1,0 +1,1162 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>店舗マップ</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Roboto:wght@400;500&display=swap">
+<style>
+/* レイアウト: 地図を全画面に敷き、左に検索ボックス付きの店舗パネル（スマホは下からのシート） */
+:root {
+  --blue: #1a73e8;
+  --blue-soft: #e8f0fe;
+  --ink: #202124;
+  --sub: #5f6368;
+  --line: #dadce0;
+  --hover: #f1f3f4;
+  --panel: #ffffff;
+  --red: #d93025;
+  --font: "Roboto", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif;
+  --panel-w: 408px;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: #e5e3df; color: var(--ink); font: 14px/1.5 var(--font); overflow: hidden; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+svg.i { width: 20px; height: 20px; fill: currentColor; flex: none; }
+
+#map { position: absolute; inset: 0; }
+
+/* ---- 検索ボックス ---- */
+#searchbox {
+  position: absolute; z-index: 1001; top: 12px; left: max(12px, env(safe-area-inset-left, 0px));
+  width: calc(var(--panel-w) - 24px); height: 48px; background: #fff; border-radius: 24px;
+  box-shadow: 0 2px 4px rgba(0,0,0,.2), 0 -1px 0 rgba(0,0,0,.02);
+  display: flex; align-items: center; padding: 0 6px 0 18px; gap: 6px;
+}
+#q { flex: 1; min-width: 0; border: 0; outline: 0; font-size: 15px; background: none; }
+.iconbtn { width: 40px; height: 40px; border: 0; background: none; border-radius: 50%; display: grid; place-items: center; color: var(--sub); }
+.iconbtn:hover { background: var(--hover); }
+#clearq[hidden] { display: none; }
+
+/* ---- 絞り込みチップ ---- */
+#chips {
+  position: absolute; z-index: 1000; top: 16px; left: calc(var(--panel-w) + 12px); right: 64px;
+  display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 2px;
+}
+#chips::-webkit-scrollbar { display: none; }
+.chip {
+  flex: none; height: 32px; border-radius: 16px; border: 0; background: #fff; padding: 0 14px;
+  box-shadow: 0 1px 3px rgba(60,64,67,.3); display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap;
+}
+.chip:hover { background: var(--hover); }
+.chip[aria-pressed="true"] { background: var(--blue-soft); color: #174ea6; }
+.chip .dot { width: 10px; height: 10px; border-radius: 50%; }
+.chip svg.i { width: 16px; height: 16px; }
+.chip.warn { background: #fef7e0; color: #8a5300; }
+.chip.warn[aria-pressed="true"] { background: #fbbc04; color: #202124; }
+.chip.gray { color: var(--sub); }
+.chip.gray[aria-pressed="true"] { background: #e8eaed; color: var(--ink); }
+.stale { display: flex; align-items: center; gap: 4px; color: #8a5300; font-size: 13px; font-weight: 500; margin: 2px 0; }
+.stale svg.i { width: 16px; height: 16px; color: #e37400; }
+.card.is-closed h3 { color: var(--sub); }
+.alert.warn { background: #fef7e0; color: #6b4300; }
+.alert.gray { background: #f1f3f4; color: var(--sub); }
+.adminbox { margin: 12px 24px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 8px; display: grid; gap: 8px; font-size: 13px; }
+.adminbox .cap2 { color: var(--sub); font-size: 12px; }
+.adminbox .row2 { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn.danger { background: var(--red); }
+.btn.ghost { background: #fff; color: var(--blue); border: 1px solid var(--line); }
+select.chip { appearance: none; padding-right: 28px; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%235f6368'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E") no-repeat right 6px center / 20px; }
+
+/* ---- 左パネル ---- */
+#panel {
+  position: absolute; z-index: 1000; top: 0; bottom: 0; left: 0; width: var(--panel-w);
+  background: var(--panel); box-shadow: 0 0 20px rgba(0,0,0,.3);
+  display: flex; flex-direction: column; padding-top: 72px; transition: transform .25s ease;
+  padding-left: env(safe-area-inset-left, 0px);
+}
+body.collapsed #panel { transform: translateX(-100%); }
+body.collapsed #chips { left: 12px; top: 72px; }
+#toggle {
+  position: absolute; left: 100%; top: 50%; transform: translateY(-50%); width: 23px; height: 48px;
+  border: 0; border-left: 1px solid var(--line); background: #fff; border-radius: 0 8px 8px 0;
+  box-shadow: 0 1px 4px rgba(0,0,0,.3); display: grid; place-items: center; color: var(--sub); padding: 0;
+}
+#toggle svg { width: 18px; height: 18px; transition: transform .25s; }
+body.collapsed #toggle svg { transform: rotate(180deg); }
+.handle { display: none; }
+
+.view { flex: 1; min-height: 0; overflow-y: auto; }
+.listhead { display: flex; align-items: center; justify-content: space-between; padding: 8px 24px 8px; border-bottom: 1px solid var(--line); color: var(--sub); font-size: 13px; }
+.listhead button { border: 0; background: none; color: var(--blue); font-weight: 500; padding: 4px 0; }
+#list { list-style: none; margin: 0; padding: 0; }
+.card { display: flex; gap: 12px; padding: 16px 24px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.card:hover, .card.hl { background: var(--hover); }
+.card .body { flex: 1; min-width: 0; }
+.card h3 { margin: 0 0 2px; font-size: 16px; font-weight: 500; line-height: 1.35; }
+.meta { color: var(--sub); font-size: 13px; }
+.meta .sep { margin: 0 4px; }
+.addr { color: var(--sub); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.closed { color: var(--red); font-size: 13px; font-weight: 500; }
+.card .side { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.route-mini { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: #fff; color: var(--blue); display: grid; place-items: center; text-decoration: none; }
+.route-mini:hover { background: var(--blue-soft); }
+.side small { color: var(--blue); font-size: 11px; }
+.dist { font-variant-numeric: tabular-nums; }
+.empty { padding: 32px 24px; color: var(--sub); text-align: center; }
+
+/* ---- 詳細ビュー ---- */
+.dhead { position: sticky; top: 0; background: #fff; display: flex; align-items: center; padding: 4px 8px; z-index: 1; }
+.dtitle { padding: 4px 24px 16px; border-bottom: 1px solid var(--line); }
+.dtitle h2 { margin: 0 0 4px; font-size: 22px; font-weight: 400; line-height: 1.3; font-family: "Noto Sans JP", var(--font); }
+.actions { display: flex; justify-content: space-around; padding: 16px 12px; border-bottom: 1px solid var(--line); }
+.act { display: flex; flex-direction: column; align-items: center; gap: 6px; color: var(--blue); text-decoration: none; border: 0; background: none; font-size: 12px; width: 84px; white-space: nowrap; }
+.act span.circ { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; }
+.act.primary span.circ { background: var(--blue); color: #fff; border-color: var(--blue); }
+.act:hover span.circ { background: var(--blue-soft); }
+.act.primary:hover span.circ { background: #1765cc; }
+.rows { padding: 8px 0; }
+.row { display: flex; gap: 24px; align-items: flex-start; padding: 10px 24px; }
+.row svg { color: var(--blue); margin-top: 1px; }
+.row a { color: var(--ink); text-decoration: none; }
+.row a:hover { text-decoration: underline; }
+.row .lbl { color: var(--sub); font-size: 12px; display: block; }
+.alert { margin: 12px 24px; padding: 10px 14px; border-radius: 8px; background: #fce8e6; color: #a50e0e; display: flex; gap: 10px; }
+.meta.inline { display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+.meta.inline svg.i { width: 15px; height: 15px; color: var(--sub); }
+.internal { border-top: 1px solid var(--line); }
+.internal .cap { padding: 12px 24px 0; font-size: 12px; color: var(--sub); letter-spacing: .04em; }
+.prods { list-style: none; margin: 0; padding: 8px 0 12px; }
+.prods li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 6px 24px; }
+.prods li:nth-child(odd) { background: #f8f9fa; }
+.pname { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+button.pname { border: 0; background: none; padding: 0; text-align: left; color: var(--blue); cursor: pointer; }
+button.pname:hover { text-decoration: underline; }
+.prodbar { padding: 12px 24px; background: var(--blue-soft); border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
+.prodbar[hidden] { display: none; }
+#prodname { font-weight: 500; color: #174ea6; overflow-wrap: anywhere; }
+.prodbar p { margin: 0; color: var(--sub); font-size: 12px; }
+.prodbar .row2 { display: flex; gap: 8px; flex-wrap: wrap; }
+.pline { display: flex; align-items: center; gap: 4px; margin-top: 2px; color: #174ea6; font-size: 13px; font-variant-numeric: tabular-nums; }
+.pline svg.i { width: 15px; height: 15px; }
+.pline .sep { margin: 0 4px; }
+.pmeta { color: var(--sub); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pmeta .sep { margin: 0 4px; }
+.noprod { margin: 0; padding: 8px 24px 14px; color: var(--sub); font-size: 13px; }
+
+/* ---- 管理者 ---- */
+#admin { margin: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; display: grid; gap: 10px; }
+#admin h4 { margin: 0; font-size: 14px; font-weight: 500; }
+#admin p { margin: 0; color: var(--sub); font-size: 13px; }
+#drop { border: 2px dashed var(--line); border-radius: 8px; padding: 18px 12px; text-align: center; color: var(--sub); cursor: pointer; }
+#drop.over { border-color: var(--blue); background: var(--blue-soft); }
+.btn { height: 36px; border-radius: 18px; border: 0; padding: 0 18px; background: var(--blue); color: #fff; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; justify-self: start; }
+.btn:disabled { background: var(--line); color: var(--sub); cursor: default; }
+#adminmsg:empty { display: none; }
+#adminmsg { font-size: 13px; background: var(--hover); border-radius: 8px; padding: 8px 12px; }
+#adminmsg .err { color: var(--red); }
+progress { width: 100%; height: 6px; accent-color: var(--blue); }
+
+.linkbtn { border: 0; background: none; padding: 0; color: var(--sub); font-size: 12px; text-decoration: underline; justify-self: center; }
+#admin a { color: var(--blue); font-size: 13px; }
+#login { position: fixed; inset: 0; z-index: 2000; background: rgba(32,33,36,.45); display: grid; place-items: center; padding: 16px; }
+#login[hidden] { display: none; }
+#login form { background: #fff; border-radius: 16px; padding: 28px 24px 20px; width: min(360px, 100%); box-shadow: 0 8px 28px rgba(0,0,0,.28); display: grid; gap: 12px; }
+#login h2 { margin: 0; font-size: 20px; font-weight: 500; }
+#login p { margin: 0; color: var(--sub); font-size: 13px; }
+#pw { width: 100%; height: 44px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; font-size: 15px; }
+#pw:focus { outline: 2px solid var(--blue); border-color: transparent; }
+#login label { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--sub); cursor: pointer; }
+#login .btn { justify-self: stretch; justify-content: center; height: 40px; }
+#loginErr { color: var(--red); font-size: 13px; min-height: 1.4em; }
+#toast { position: absolute; z-index: 1100; left: 50%; bottom: 24px; transform: translateX(-50%); background: #323232; color: #fff; padding: 12px 20px; border-radius: 4px; font-size: 13px; max-width: calc(100% - 32px); }
+
+/* ---- 地図上のコントロール ---- */
+.leaflet-control-zoom { border: 0 !important; box-shadow: 0 1px 4px rgba(0,0,0,.3) !important; border-radius: 8px !important; overflow: hidden; }
+.leaflet-control-zoom a { width: 40px !important; height: 40px !important; line-height: 40px !important; color: var(--sub) !important; font-size: 22px !important; }
+.mapbtn { width: 40px; height: 40px; background: #fff; border: 0; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.3); display: grid; place-items: center; color: var(--sub); }
+.mapbtn.on { color: var(--blue); }
+.layerbtn { width: 72px; height: 72px; border-radius: 8px; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); padding: 0; overflow: hidden; position: relative; background: #8aa; }
+.layerbtn img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.layerbtn span { position: absolute; left: 0; right: 0; bottom: 0; color: #fff; font-size: 11px; font-weight: 500; padding: 2px; background: linear-gradient(transparent, rgba(0,0,0,.6)); display: flex; justify-content: center; gap: 2px; align-items: center; }
+.layerbtn svg { width: 14px; height: 14px; }
+body:not(.collapsed) .leaflet-bottom.leaflet-left { left: var(--panel-w); }
+.leaflet-bottom.leaflet-left { transition: left .25s; }
+
+/* ピン */
+.gpin { filter: drop-shadow(0 1px 1.5px rgba(0,0,0,.35)); transition: transform .15s; transform-origin: 50% 100%; }
+.gpin.sel { transform: scale(1.35); }
+.pin-label { background: none; border: 0; box-shadow: none; padding: 0 0 0 2px; font: 500 12px var(--font); color: var(--c, #b31412);
+  text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff, 0 0 3px #fff; white-space: nowrap; }
+.pin-label::before { display: none; }
+.map-far .pin-label { display: none; }
+.cluster { width: 40px; height: 40px; border-radius: 50%; background: #fff; color: var(--ink); font: 500 13px var(--font);
+  display: grid; place-items: center; box-shadow: 0 1px 4px rgba(0,0,0,.35); border: 3px solid #ea4335; }
+.here { width: 18px; height: 18px; border-radius: 50%; background: #4285f4; border: 3px solid #fff; box-shadow: 0 0 0 8px rgba(66,133,244,.2), 0 1px 3px rgba(0,0,0,.3); }
+.leaflet-container { font-family: var(--font); background: #e5e3df; }
+
+/* ---- スマホ：下からのシート ---- */
+@media (max-width: 760px) {
+  :root { --sheet: 42vh; }
+  #searchbox { left: 12px; right: 12px; width: auto; top: max(12px, env(safe-area-inset-top, 0px)); }
+  #chips, body.collapsed #chips { left: 12px; right: 12px; top: calc(max(12px, env(safe-area-inset-top, 0px)) + 56px); }
+  #panel { top: auto; left: 0; right: 0; width: auto; height: var(--sheet); padding-top: 0; border-radius: 16px 16px 0 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px); padding-left: 0; transition: height .25s ease; }
+  body.expanded #panel { height: calc(100% - 64px); }
+  body.collapsed #panel { transform: none; height: 64px; }
+  #toggle { display: none; }
+  .handle { display: block; border: 0; background: none; width: 100%; padding: 8px 0 4px; flex: none; }
+  .handle::before { content: ""; display: block; margin: 0 auto; width: 36px; height: 4px; border-radius: 2px; background: var(--line); }
+  .leaflet-bottom { bottom: var(--sheet) !important; transition: bottom .25s; }
+  body.collapsed .leaflet-bottom { bottom: 64px !important; }
+  body:not(.collapsed) .leaflet-bottom.leaflet-left { left: 0; }
+  .card, .listhead, .row { padding-left: 16px; padding-right: 16px; }
+  .dtitle { padding-left: 16px; padding-right: 16px; }
+  .layerbtn { width: 56px; height: 56px; }
+  .layerbtn span { font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div id="map" role="region" aria-label="地図"></div>
+
+<div id="searchbox">
+  <input id="q" type="search" placeholder="店舗・商品を検索" aria-label="店舗名・住所・商品名で検索" autocomplete="off">
+  <button class="iconbtn" id="clearq" type="button" aria-label="検索をクリア" hidden><svg class="i" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+  <button class="iconbtn" id="searchbtn" type="button" aria-label="検索" style="color:var(--blue)"><svg class="i" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg></button>
+</div>
+
+<div id="chips" role="toolbar" aria-label="絞り込み"></div>
+
+<aside id="panel">
+  <button class="handle" id="handle" type="button" aria-label="パネルを広げる／縮める"></button>
+  <button id="toggle" type="button" aria-label="パネルを閉じる／開く"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg></button>
+
+  <div class="view" id="listview">
+    <div class="listhead"><span id="count">読み込み中…</span><button type="button" id="nearby">現在地から近い順</button></div>
+    <div class="prodbar" id="prodbar" hidden>
+      <div id="prodname"></div>
+      <div class="row2">
+        <button type="button" class="btn" id="copyContacts"><svg class="i" viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>連絡先をコピー</button>
+        <button type="button" class="btn ghost" id="clearProduct">絞り込みを解除</button>
+      </div>
+      <p>店名・電話番号・住所などをタブ区切りでコピーします。Excel やメールにそのまま貼り付けられます。</p>
+    </div>
+    <ul id="list"></ul>
+    <section id="admin" hidden>
+      <h4>データ更新（管理者）</h4>
+      <p><b>店舗の更新</b>：得意先マスタ（Excel または CSV）をドロップ。終了・本部・催事は自動で除外し、住所から位置を割り出します。<br>
+        <b>使用商品の更新（週1回）</b>：売上明細をドロップ。今までの分に追記し、直近3ヶ月より古い分は自動で消えます。</p>
+      <div id="drop" tabindex="0" role="button">ここにファイルをドロップ<br>またはクリックして選択</div>
+      <input id="file" type="file" accept=".csv,.xlsx,.xls,text/csv" hidden>
+      <progress id="prog" value="0" max="1" hidden></progress>
+      <div id="adminmsg"></div>
+      <button class="btn" id="save" type="button" disabled><svg class="i" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg><span id="savename">保存</span></button>
+      <p>取り込んだ内容を地図で確認してから保存してください。保存すると全員の地図に反映されます。</p>
+      <p><a id="dblink" href="#" target="_blank" rel="noopener" hidden>データのスプレッドシートを開く</a></p>
+      <p><button type="button" class="linkbtn" id="logout" hidden>このPCに記憶した管理者の合言葉を消す</button></p>
+    </section>
+  </div>
+  <div class="view" id="detailview" hidden></div>
+</aside>
+
+<div id="toast" hidden></div>
+
+<div id="login" hidden>
+  <form id="loginForm">
+    <h2>管理者の合言葉</h2>
+    <p>データをサーバーに保存するときだけ必要です</p>
+    <input type="password" id="pw" autocomplete="current-password" aria-label="管理者の合言葉" required>
+    <label><input type="checkbox" id="remember" checked> このPCで記憶する</label>
+    <button class="btn" type="submit" id="loginBtn">保存する</button>
+    <button type="button" class="linkbtn" id="loginCancel">やめる</button>
+    <div id="loginErr" role="alert"></div>
+  </form>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+/* ===================== 設定 ===================== */
+const CONFIG = {
+  title: "店舗マップ",            // タブに表示する名前
+  // サーバー（GAS）未設定のときだけ使う、確認用の CSV（data フォルダ）
+  csvPath: "../data/stores.csv",
+  // 社内向けに表示する項目："course"（配送コース）、"rep"（担当者）。
+  // 一覧・詳細に表示されて絞り込みでき、stores.csv にも書き出します。一般公開するときは [] にしてください。
+  internalFields: ["course"],
+  // 使用商品（社内向け）：売上明細から、直近◯ヶ月に出荷した商品を店舗ごとに表示します。0 で非表示。
+  productMonths: 3,
+  productsPath: "../data/products.csv",
+  // 商品ではない明細（送料・手数料など）。この言葉を含む行は使用商品に入れません。
+  productExclude: ["手数料", "送料", "クール便", "運賃", "値引"],
+  // この期間（月）より前から出荷がない店舗を「要確認」にする
+  staleMonths: 3,
+  // 得意先マスタ取込時に地図へ載せない業態（得意先分類2名）。
+  // "" は分類なし（大阪便・自社便などの配送用、従業員持ち帰り・サンプル・廃棄・店売りなどの社内用の得意先）
+  excludeTypes: ["本部(請求先)", "催事", "業者", ""],
+  // 業態ごとのピンの色
+  typeColors: {
+    "ラーメン店(自社のみ)": "#ea4335",
+    "ラーメン店(他社併用)": "#f57c00",
+    "食堂/居酒屋": "#1e8e3e",
+  },
+  defaultColor: "#7b1fa2",
+};
+
+// GAS API の URL（deploy.bat が自動で書き込む。空のときは data フォルダの CSV で動く確認用表示）
+const API_URL = 'https://script.google.com/macros/s/AKfycbxeianCadj7QHSjGAoKPvk69mzoOvsuo2EF53IgirOXji_zTNVm8gxbrWOF75eCZ3mF/exec';
+const PW_KEY = 'storemap_password';
+
+/* 公開用CSVの列（日本語の列名で読み書き） */
+const FIELDS = {
+  code: ["得意先コード"], name: ["店名", "店舗名"], type: ["業態"], area: ["エリア"],
+  address: ["住所"], tel: ["電話番号", "TEL"], hours: ["営業時間"], holiday: ["定休日"],
+  recommend: ["おすすめ"], url: ["URL"], note: ["お知らせ"], lat: ["緯度"], lng: ["経度"],
+  course: ["配送コース"], rep: ["担当者"],
+  status: ["状態"], closedDate: ["終了日"], lastShip: ["最終出荷日"],
+};
+const OUT_COLS = ["code", "name", "type", "area", "address", "tel", "hours", "holiday", "recommend", "url", "note", "lat", "lng",
+  "status", "closedDate", "lastShip"]
+  .concat(CONFIG.internalFields);
+const INTERNAL = { course: { label: "配送コース", icon: "truck" }, rep: { label: "担当者", icon: "person" } };
+const showsInternal = (k) => CONFIG.internalFields.includes(k);
+
+/* ===================== アイコン ===================== */
+const P = {
+  dir: "M21.71 11.29l-9-9a.996.996 0 0 0-1.41 0l-9 9a.996.996 0 0 0 0 1.41l9 9c.39.39 1.02.39 1.41 0l9-9a.996.996 0 0 0 0-1.41zM14 14.5V12h-4v3H8v-4c0-.55.45-1 1-1h5V7.5l3.5 3.5-3.5 3.5z",
+  phone: "M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z",
+  place: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 0 5z",
+  clock: "M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z",
+  link: "M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z",
+  info: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z",
+  back: "M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z",
+  copy: "M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z",
+  truck: "M20 8h-3V4H3c-1.1 0-2 .9-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm13.5-9l1.96 2.5H17V9.5h2.5zm-1.5 9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z",
+  person: "M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
+  tag: "M21.41 11.58l-9-9C12.05 2.22 11.55 2 11 2H4c-1.1 0-2 .9-2 2v7c0 .55.22 1.05.59 1.42l9 9c.36.36.86.58 1.41.58.55 0 1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41 0-.55-.23-1.06-.59-1.42zM5.5 7C4.67 7 4 6.33 4 5.5S4.67 4 5.5 4 7 4.67 7 5.5 6.33 7 5.5 7z",
+  star: "M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z",
+  locate: "M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3A8.994 8.994 0 0 0 13 3.06V1h-2v2.06A8.994 8.994 0 0 0 3.06 11H1v2h2.06A8.994 8.994 0 0 0 11 20.94V23h2v-2.06A8.994 8.994 0 0 0 20.94 13H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z",
+  layers: "M11.99 18.54l-7.37-5.73L3 14.07l9 7 9-7-1.63-1.27-7.38 5.74zM12 16l7.36-5.73L21 9l-9-7-9 7 1.63 1.27L12 16z",
+  bowl: "M2 11h20c0 4.42-3.58 8-8 8h-4c-4.42 0-8-3.58-8-8zm4-2V3h1.5v6H6zm3 0V2h1.5v7H9zm9.6-6.3l1.06 1.06L14.4 9h-2.1l6.3-6.3z",
+};
+const icon = (k, cls = "i") => `<svg class="${cls}" viewBox="0 0 24 24"><path d="${P[k]}"/></svg>`;
+
+/* ===================== 地図 ===================== */
+document.title = CONFIG.title;
+const map = L.map("map", { zoomControl: false, attributionControl: true, maxZoom: 19 }).setView([35.0, 135.76], 6);
+const GSI = '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>';
+const baseLayers = {
+  map: L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", { maxZoom: 19, maxNativeZoom: 18, attribution: GSI }),
+  photo: L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg", { maxZoom: 19, maxNativeZoom: 18, attribution: GSI }),
+};
+let baseKey = "map";
+baseLayers.map.addTo(map);
+
+/* 簡素化した地図：国土地理院のベクトル地図から建物・寺社や学校の記号・等高線などを外し、Googleマップ風の配色にする。
+   読み込めなかった時は上の淡色地図のまま表示する。 */
+const VECTOR_STYLE = "https://gsi-cyberjapan.github.io/optimal_bvmap/style/std.json";
+const VECTOR_TILES = "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/{z}/{x}/{y}.pbf";
+const LAND = "#f5f3ef", WATER = "#aadaff", LABEL = "#5f6368";
+const DROP_LAYERS = ["BldA", "Cntr", "Isbt", "TpgphLine", "WStrL", "WStrA", "WRltLine", "SpcfArea",
+  "StrctArea", "StrctLine", "PwrTrnsmL", "RdEdg", "RdCompt", "RailTrCL"];
+
+function simplifyStyle(st) {
+  st.sources.v.tiles = [VECTOR_TILES];
+  st.layers = st.layers.filter((l) => {
+    const sl = l["source-layer"];
+    if (DROP_LAYERS.includes(sl)) return false;
+    if (sl === "AdmBdry" && !l.id.includes("都府県界")) return false;         // 市区町村界などの細かい境界
+    if (sl === "Anno" && l.layout?.["icon-image"]) return false;               // 寺・学校・郵便局などの記号、道路番号
+    if (sl === "RailCL" && /ククリ|旗竿/.test(l.id)) return false;            // 鉄道の白黒の縁取り
+    return true;
+  });
+  for (const l of st.layers) {
+    const sl = l["source-layer"], p = (l.paint ||= {});
+    if (l.type === "background") p["background-color"] = ["step", ["zoom"], LAND, 4, WATER, 8, LAND];
+    else if (sl === "AdmArea") p["fill-color"] = LAND;
+    else if (sl === "WA") p["fill-color"] = WATER;
+    else if (sl === "RvrCL" || sl === "WL" || sl === "Cstline") p["line-color"] = WATER;
+    else if (sl === "RailCL") p["line-color"] = "#b4b8bd";
+    else if (sl === "RdCL" && l.id.includes("ククリ")) {
+      p["line-color"] = ["case", ["==", ["get", "vt_rnkwidth"], "不明"], "rgba(0,0,0,0)", ["==", ["get", "vt_motorway"], 1], "#e9b44c", "#d9d9d9"];
+    } else if (sl === "RdCL" && l.id.includes("色")) {
+      p["line-color"] = ["case", ["==", ["get", "vt_motorway"], 1], "#f8c967",
+        ["match", ["get", "vt_rdctg"], ["国道", "高速自動車国道等"], "#fde293", "都道府県道", "#fff4c2", "#ffffff"]];
+    } else if (sl === "RdCL" && l.id.includes("ZL4-10")) {                       // 広域表示の国道・高速
+      p["line-color"] = ["case", ["==", ["get", "vt_motorway"], 1], "#f2b84b", "#f5d37a"];
+    } else if (sl === "Anno" && l.type === "symbol") {
+      p["text-color"] = LABEL; p["text-halo-color"] = "#ffffff";
+    }
+  }
+  emphasizePrefBorder(st);
+  return st;
+}
+
+/* 都道府県界：白い縁取り付きのはっきりした破線にし、道路より上（文字より下）に描く */
+const PREF_COLOR = "#7b61b8";
+function emphasizePrefBorder(st) {
+  const i = st.layers.findIndex((l) => l["source-layer"] === "AdmBdry" && l.id.includes("都府県界"));
+  if (i < 0) return;
+  const [line] = st.layers.splice(i, 1);
+  const width = ["interpolate", ["linear"], ["zoom"], 5, 1.2, 9, 2.2, 14, 3];
+  line.paint = { "line-color": PREF_COLOR, "line-width": width, "line-dasharray": [4, 2.5],
+    "line-opacity": ["interpolate", ["linear"], ["zoom"], 4, 0, 5, 1] };
+  line.layout = { "line-cap": "butt", "line-join": "round" };
+  const casing = { ...line, id: line.id + "_縁取り", paint: { "line-color": "#ffffff", "line-opacity": 0.85,
+    "line-width": ["interpolate", ["linear"], ["zoom"], 5, 3.5, 9, 6, 14, 8] } };
+  const anno = st.layers.findIndex((l) => l["source-layer"] === "Anno");
+  st.layers.splice(anno < 0 ? st.layers.length : anno, 0, casing, line);
+}
+
+fetch(VECTOR_STYLE).then((r) => r.json()).then((st) => {
+  const vector = L.maplibreGL({ style: simplifyStyle(st), attribution: GSI });
+  const showing = map.hasLayer(baseLayers.map);
+  if (showing) map.removeLayer(baseLayers.map);
+  baseLayers.map = vector;
+  if (showing) vector.addTo(map);
+}).catch(() => {});
+L.control.zoom({ position: "bottomright", zoomInTitle: "拡大", zoomOutTitle: "縮小" }).addTo(map);
+
+// 現在地ボタン
+const LocateCtl = L.Control.extend({ onAdd() {
+  const b = L.DomUtil.create("button", "mapbtn"); b.type = "button"; b.title = "現在地"; b.id = "locate"; b.innerHTML = icon("locate");
+  L.DomEvent.disableClickPropagation(b); b.onclick = locate; return b;
+} });
+new LocateCtl({ position: "bottomright" }).addTo(map);
+
+// 地図／航空写真の切替（Googleマップ左下のボタン風）
+const LayerCtl = L.Control.extend({ onAdd() {
+  const b = L.DomUtil.create("button", "layerbtn"); b.type = "button"; b.id = "layerbtn";
+  L.DomEvent.disableClickPropagation(b);
+  const draw = () => {
+    const next = baseKey === "map" ? "photo" : "map";
+    const tile = next === "photo" ? "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/15/28743/12971.jpg" : "https://cyberjapandata.gsi.go.jp/xyz/pale/15/28743/12971.png";
+    b.innerHTML = `<img src="${tile}" alt=""><span>${icon("layers")}${next === "photo" ? "航空写真" : "地図"}</span>`;
+  };
+  b.onclick = () => { map.removeLayer(baseLayers[baseKey]); baseKey = baseKey === "map" ? "photo" : "map"; baseLayers[baseKey].addTo(map); draw(); };
+  draw(); return b;
+} });
+new LayerCtl({ position: "bottomleft" }).addTo(map);
+
+const cluster = L.markerClusterGroup({
+  showCoverageOnHover: false, maxClusterRadius: 44, spiderfyOnMaxZoom: true, disableClusteringAtZoom: 16,
+  iconCreateFunction: (c) => L.divIcon({ className: "", html: `<div class="cluster">${c.getChildCount()}</div>`, iconSize: [40, 40] }),
+});
+map.addLayer(cluster);
+const syncZoomClass = () => map.getContainer().classList.toggle("map-far", map.getZoom() < 14);
+map.on("zoomend", syncZoomClass); syncZoomClass();
+
+const colorOf = (type) => CONFIG.typeColors[type] || CONFIG.defaultColor;
+const CLOSED_COLOR = "#9aa0a6";
+const pinColor = (s) => isClosed(s) ? CLOSED_COLOR : colorOf(s.type);
+// 要確認の店は、ピンの右上に黄色い「!」を付ける
+function pinIcon(s, sel) {
+  const badge = isStale(s) ? `<circle cx="24" cy="6.5" r="6" fill="#fbbc04" stroke="#fff" stroke-width="1.5"/><text x="24" y="10.2" text-anchor="middle" font-size="10" font-weight="700" font-family="Arial,sans-serif" fill="#202124">!</text>` : "";
+  const svg = `<svg class="gpin${sel ? " sel" : ""}" width="31" height="43" viewBox="0 0 31 43"><path fill="${pinColor(s)}" stroke="rgba(0,0,0,.25)" d="M13.5 1C6.6 1 1 6.6 1 13.5 1 23 13.5 42 13.5 42S26 23 26 13.5C26 6.6 20.4 1 13.5 1z"/><circle cx="13.5" cy="13.5" r="5.2" fill="rgba(0,0,0,.28)"/>${badge}</svg>`;
+  return L.divIcon({ className: "", html: svg, iconSize: [31, 43], iconAnchor: [13.5, 42], tooltipAnchor: [12, -28] });
+}
+
+/* ===================== 状態 ===================== */
+const state = { stores: [], published: [], q: "", type: null, area: "", course: "", rep: "", here: null, sel: null,
+  sales: [], products: new Map(), productRange: null, staleCutoff: "", coverageFull: false,
+  view: "active",   // active：取引中 ／ stale：要確認だけ ／ closed：終了店舗だけ
+  product: "",      // 「商品」で絞り込み中の商品名
+  pending: {} };
+const markers = new Map();
+let hereMarker = null;
+
+/* ===================== ユーティリティ ===================== */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const toHalf = (s) => String(s ?? "").replace(/[０-９．－＋]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).trim();
+const clean = (s) => String(s ?? "").replace(/　/g, " ").replace(/\s+/g, " ").trim();
+const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : "";
+const routeUrl = (s) => `https://www.google.com/maps/dir/?api=1&destination=${s.pos[0]},${s.pos[1]}`;
+const distText = (km) => km < 1 ? Math.round(km * 1000) + " m" : km.toFixed(1) + " km";
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.hidden = true, 3200);
+}
+function distKm(a, b) {
+  const R = 6371, rad = Math.PI / 180, dLat = (b[0] - a[0]) * rad, dLng = (b[1] - a[1]) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * rad) * Math.cos(b[0] * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function decodeText(buf) {
+  // Excelの「CSV UTF-8」と、基幹システム・Excel標準の Shift_JIS の両方に対応
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(buf).replace(/^﻿/, ""); }
+  catch { return new TextDecoder("shift_jis").decode(buf); }
+}
+
+/* ===================== ファイル → 表 ===================== */
+function readTable(buf) {
+  const head = new Uint8Array(buf.slice(0, 4));
+  let rows;
+  if (head[0] === 0x50 && head[1] === 0x4b || head[0] === 0xd0 && head[1] === 0xcf) {   // xlsx / xls
+    const wb = XLSX.read(buf, { type: "array" });
+    // 日付は Excel のシリアル値のまま受け取り、toIsoDate で変換する
+    rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: "" });
+  } else {
+    rows = Papa.parse(decodeText(buf), { skipEmptyLines: "greedy" }).data;
+  }
+  // 1行目がタイトル行（例:「得意先 : 00000001 ～」）でも、列名の行を探して使う
+  const hi = rows.findIndex((r) => r.some((c) => ["得意先名1", "店名", "店舗名", "商品名1", "商品名"].includes(String(c).trim())));
+  if (hi < 0) throw new Error("列名の行が見つかりません（得意先マスタ・売上明細・stores.csv・products.csv のいずれかを選んでください）。");
+  const header = rows[hi].map((h) => String(h).trim());
+  const objs = rows.slice(hi + 1).map((r) => Object.fromEntries(header.map((h, i) => [h, String(r[i] ?? "").trim()])));
+  const preamble = rows.slice(0, hi).map((r) => r.join(" ")).join("\n");   // 「日付 : 2026年10月20日 ～ …」など
+  return { header, objs, preamble };
+}
+
+/* 位置検索用の住所：京都の通り名（「四条上る」「西洞院西入」など）は町名の検索を邪魔するので外す */
+const geoKey = (addr) => addr.replace(/\s/g, "").replace(/(区|市)[^区市]*?(上る|下る|上ル|下ル|西入る?|東入る?|西入ル|東入ル)+/, "$1");
+
+/* 得意先マスタの1行 → 店舗（地図に載せないものは null） */
+const CORP = /株式会社|有限会社|合同会社|合資会社|\(株\)|（株）|\(有\)|（有）/;
+// 略称・得意先名に「※終了」「※終」が付いた得意先は、終了店舗として取り込む（終了日はマスタに無いので空欄）
+const MASTER_CLOSED = /※終/;
+function fromMaster(o) {
+  if (/^1/.test(o["削除区分"] || "")) return null;
+  const type = clean(o["得意先分類2名"]);
+  if (CONFIG.excludeTypes.includes(type)) return null;
+  const closed = MASTER_CLOSED.test(o["得意先略称"] + o["得意先名1"] + o["得意先名2"]);
+  const n1 = clean(o["得意先名1"]).replace(/※終.*$/, "").trim(), n2 = clean(o["得意先名2"]).replace(/※終.*$/, "").trim();
+  const name = CORP.test(n1) && n2 ? n2 : n1;
+  if (!name) return null;
+  const a1 = clean(o["住所1"]), a2 = clean(o["住所2"]), a3 = clean(o["住所3"]);
+  return {
+    code: o["得意先"], name, type,
+    area: clean(o["得意先分類3名"]) || (a1.match(/^.{2,3}?[都道府県]/) || [""])[0],
+    address: a1 + a2 + (a3 ? " " + a3 : ""), geoAddress: geoKey(a1 + a2),
+    tel: toHalf(o["TEL"]), course: clean(o["配送コース名"]), rep: clean(o["担当者名"]),
+    status: closed ? CLOSED : "", closedDate: "", lastShip: "",
+    hours: "", holiday: "", recommend: "", url: safeUrl(o["得意先URL"]), note: "", pos: null,
+  };
+}
+/* 公開用CSVの1行 → 店舗 */
+function fromPublished(o, header) {
+  const get = (k) => { const n = FIELDS[k].find((x) => header.includes(x)); return n ? clean(o[n]) : ""; };
+  const name = get("name");
+  if (!name) return null;
+  const lat = parseFloat(toHalf(get("lat"))), lng = parseFloat(toHalf(get("lng")));
+  return {
+    code: get("code"), name, type: get("type"), area: get("area"), address: get("address"), geoAddress: geoKey(get("address").split(" ")[0]),
+    tel: get("tel"), hours: get("hours"), holiday: get("holiday"), recommend: get("recommend"), url: safeUrl(get("url")), note: get("note"),
+    course: get("course"), rep: get("rep"),
+    status: get("status") === CLOSED ? CLOSED : "", closedDate: toIsoDate(get("closedDate")), lastShip: toIsoDate(get("lastShip")),
+    pos: Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null,
+  };
+}
+
+/* ===================== 使用商品（売上明細 → products.csv） =====================
+   products.csv は「得意先コード・商品名・出荷日・数量」を出荷日ごとに持つ履歴。
+   週1回の売上明細を取り込むたびに、その期間の分を差し替えて追記し、直近◯ヶ月より古い分を捨てる。 */
+function toIsoDate(v) {
+  v = toHalf(v);
+  if (!v) return "";
+  if (/^\d{5}(\.\d+)?$/.test(v)) return new Date(Date.UTC(1899, 11, 30) + Math.floor(+v) * 864e5).toISOString().slice(0, 10);
+  const m = v.match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/);
+  return m ? `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}` : "";
+}
+function monthsBefore(iso, n) {
+  const d = new Date(iso + "T00:00:00Z"); d.setUTCMonth(d.getUTCMonth() - n);
+  return d.toISOString().slice(0, 10);
+}
+const shortDate = (iso) => iso ? `${+iso.slice(5, 7)}/${+iso.slice(8, 10)}` : "";
+
+/* 売上明細 → 出荷日ごとの数量（返品の赤伝も合算）。期間は見出しの「日付 : ～」から取る */
+function fromSales(objs, preamble) {
+  const sum = new Map();
+  for (const o of objs) {
+    const code = o["得意先"], name = clean(o["商品名1"] || o["商品名"]), date = toIsoDate(o["出荷日"] || o["売上日"]);
+    if (!/^\d+$/.test(code) || !name || !date) continue;          // 合計行などは除く
+    const key = `${code}\t${name}\t${date}`;
+    sum.set(key, (sum.get(key) || 0) + (parseFloat(toHalf(o["売上数"])) || 0));
+  }
+  const rows = [...sum].map(([k, qty]) => { const [code, name, date] = k.split("\t"); return { code, name, date, qty }; });
+  const range = (preamble.match(/日付[^\n]*/) || [""])[0].match(/\d{4}\D+\d{1,2}\D+\d{1,2}/g)?.map(toIsoDate);
+  const dates = rows.map((r) => r.date).sort();
+  return { rows, from: range?.[0] || dates[0], to: range?.[1] || dates.at(-1) };
+}
+function fromProductsCsv(objs) {
+  return objs.map((o) => ({ code: o["得意先コード"], name: clean(o["商品名"]), date: toIsoDate(o["出荷日"]), qty: parseFloat(o["数量"]) || 0 }))
+    .filter((r) => r.code && r.name && r.date);
+}
+function mergeSales(old, add) {
+  const kept = old.filter((r) => r.date < add.from || r.date > add.to);   // 取り込む期間の分は新しいファイルで置き換え
+  return pruneSales(kept.concat(add.rows));
+}
+function pruneSales(rows) {
+  const latest = rows.reduce((m, r) => r.date > m ? r.date : m, "");
+  const cutoff = latest ? monthsBefore(latest, CONFIG.productMonths) : "";
+  return rows.filter((r) => r.date > cutoff && r.qty > 0 && !CONFIG.productExclude.some((w) => r.name.includes(w)))
+    .sort((a, b) => a.code.localeCompare(b.code) || b.date.localeCompare(a.date) || a.name.localeCompare(b.name));
+}
+/* 店舗ごとに「商品・最終出荷日・期間の合計数量」へまとめる */
+function setSales(rows) {
+  state.sales = rows;
+  state.products = new Map();
+  let latest = "";
+  for (const r of rows) {
+    if (r.date > latest) latest = r.date;
+    const list = state.products.get(r.code) || (state.products.set(r.code, new Map()), state.products.get(r.code));
+    const p = list.get(r.name) || { name: r.name, last: "", qty: 0 };
+    p.qty += r.qty; if (r.date > p.last) p.last = r.date;
+    list.set(r.name, p);
+  }
+  for (const [code, m] of state.products) state.products.set(code, [...m.values()].sort((a, b) => b.last.localeCompare(a.last) || b.qty - a.qty));
+  state.productRange = latest ? { from: monthsBefore(latest, CONFIG.productMonths), to: latest } : null;
+  // 取り込んだ出荷データが要確認の判定期間を満たしているか（満たすまでは「記録なし」を要確認にしない）
+  const earliest = rows.reduce((m, r) => !m || r.date < m ? r.date : m, "");
+  state.staleCutoff = latest ? monthsBefore(latest, CONFIG.staleMonths) : "";
+  state.coverageFull = !!earliest && earliest <= addDays(state.staleCutoff, 14);
+}
+const addDays = (iso, n) => new Date(Date.parse(iso + "T00:00:00Z") + n * 864e5).toISOString().slice(0, 10);
+
+/* ===================== 要確認（出荷が止まった店）・終了店舗 ===================== */
+const CLOSED = "終了";
+const isClosed = (s) => s.status === CLOSED;
+const allStores = () => state.stores.concat(state.unplaced || []);
+// 終了日があるのは地図で登録した店。無いのは得意先マスタの「※終了」「※終」から取り込んだ店
+const closedText = (s) => "終了店舗" + (s.closedDate ? `（${fullDate(s.closedDate)} 登録）` : "（得意先マスタで終了）");
+// 最終出荷日：店舗データに記録した日と、手元の出荷データの新しい方
+function lastShipOf(s) {
+  const p = state.products.get(s.code)?.[0]?.last || "";
+  return p > (s.lastShip || "") ? p : (s.lastShip || "");
+}
+function isStale(s) {
+  if (isClosed(s) || !state.staleCutoff) return false;
+  const last = lastShipOf(s);
+  return last ? last <= state.staleCutoff : state.coverageFull;
+}
+const staleText = (s) => `${CONFIG.staleMonths}ヶ月以上出荷なし` + (lastShipOf(s) ? `（最終 ${fullDate(lastShipOf(s))}）` : "");
+const fullDate = (iso) => iso ? iso.replace(/-/g, "/") : "";
+const todayIso = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10); };
+
+// 出荷データを取り込んだら、各店舗の最終出荷日を進める（3ヶ月より古い出荷データを消しても最終出荷日は残る）
+function updateLastShip() {
+  let changed = false;
+  for (const s of state.stores) {
+    const last = lastShipOf(s);
+    if (last !== s.lastShip) { s.lastShip = last; changed = true; }
+  }
+  return changed;
+}
+
+// 状態が変わったときに、ピン・絞り込み・一覧・詳細をまとめて描き直す
+function refreshAll() {
+  for (const [s, m] of markers) m.setIcon(pinIcon(s, s === state.sel));
+  renderChips(); applyFilter(false);
+  if (state.sel && !$("detailview").hidden) openDetail(state.sel, false);
+}
+function productsTable(rows) {
+  return [["得意先コード", "商品名", "出荷日", "数量"], ...rows.map((r) => [r.code, r.name, r.date, String(r.qty)])];
+}
+function productBlock(s) {
+  if (!CONFIG.productMonths || !state.productRange) return "";
+  const list = state.products.get(s.code) || [];
+  const { from, to } = state.productRange;
+  return `<div class="internal"><div class="cap">使用中の商品（直近${CONFIG.productMonths}ヶ月：${shortDate(from)}〜${shortDate(to)} 出荷分）</div>
+    ${list.length ? `<ul class="prods">${list.map((p) => `<li><button type="button" class="pname" data-prod="${esc(p.name)}" title="この商品を使っている店舗を表示">${esc(p.name)}</button><span class="pmeta">最終 ${shortDate(p.last)}<span class="sep">·</span>数量 ${p.qty.toLocaleString()}</span></li>`).join("")}</ul>`
+      : `<p class="noprod">この期間の出荷はありません</p>`}</div>`;
+}
+
+/* ===================== 住所 → 緯度経度（国土地理院 住所検索） ===================== */
+const GEO_KEY = "store-map-geocache";
+let geoCache = {};
+try { geoCache = JSON.parse(localStorage.getItem(GEO_KEY) || "{}"); } catch {}
+async function geocode(address) {
+  if (geoCache[address]) return geoCache[address];
+  const res = await fetch("https://msearch.gsi.go.jp/address-search/AddressSearch?q=" + encodeURIComponent(address));
+  const json = await res.json();
+  if (!json.length) return null;
+  const [lng, lat] = json[0].geometry.coordinates;
+  geoCache[address] = [lat, lng];
+  try { localStorage.setItem(GEO_KEY, JSON.stringify(geoCache)); } catch {}
+  return [lat, lng];
+}
+async function resolvePositions(stores, onProgress) {
+  const todo = stores.filter((s) => !s.pos && s.geoAddress);
+  let done = 0;
+  const worker = async () => {
+    while (todo.length) {
+      const s = todo.shift();
+      try { s.pos = await geocode(s.geoAddress); } catch {}
+      onProgress?.(++done);
+    }
+  };
+  const total = todo.length;
+  await Promise.all([worker(), worker(), worker()]);
+  return total;
+}
+
+/* ===================== 一覧・ピン ===================== */
+function setStores(stores) {
+  state.stores = stores.filter((s) => s.pos);
+  state.unplaced = stores.filter((s) => !s.pos);   // 位置の無い店（住所なしの終了店舗など）も、保存するときは残す
+  state.sel = null;
+  markers.clear(); cluster.clearLayers();
+  for (const s of state.stores) {
+    const m = L.marker(s.pos, { icon: pinIcon(s, false), title: s.name, riseOnHover: true });
+    m.bindTooltip(esc(s.name), { permanent: true, direction: "right", className: "pin-label", interactive: false });
+    m.on("add", () => m.getTooltip()?.getElement()?.style.setProperty("--c", pinColor(s)));
+    m.on("click", () => openDetail(s));
+    markers.set(s, m);
+  }
+  renderChips(); applyFilter(true);
+}
+
+function filtered() {
+  const q = state.q.toLowerCase();
+  const inView = (s) => state.view === "closed" ? isClosed(s) : !isClosed(s) && (state.view !== "stale" || isStale(s));
+  let list = state.stores.filter((s) => inView(s) &&
+    (!state.type || s.type === state.type) && (!state.area || s.area === state.area) &&
+    (!state.course || s.course === state.course) && (!state.rep || s.rep === state.rep) &&
+    (!state.product || productOf(s, state.product)) &&
+    (!q || [s.name, s.address, s.type, s.area, s.recommend, s.tel, ...(state.products.get(s.code) || []).map((p) => p.name)]
+      .join(" ").toLowerCase().includes(q)));
+  if (state.here) list = list.map((s) => Object.assign(s, { km: distKm(state.here, s.pos) })).sort((a, b) => a.km - b.km);
+  else if (state.product) {   // 商品で絞り込み中は、最近その商品を出荷した店から並べる
+    const p = (s) => productOf(s, state.product);
+    list.sort((a, b) => p(b).last.localeCompare(p(a).last) || p(b).qty - p(a).qty);
+  }
+  return list;
+}
+
+/* ===================== 商品から店舗を引く ===================== */
+const productOf = (s, name) => (state.products.get(s.code) || []).find((p) => p.name === name);
+// 商品ごとの使用店舗数（終了店舗は数えない）。多い順
+function productCounts() {
+  const count = new Map();
+  for (const s of state.stores) {
+    if (isClosed(s)) continue;
+    for (const p of state.products.get(s.code) || []) count.set(p.name, (count.get(p.name) || 0) + 1);
+  }
+  return [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+function selectProduct(name) {
+  state.product = name;
+  renderChips(); showList(); applyFilter(true);
+}
+// 連絡先リスト：Excel やメールにそのまま貼れるタブ区切り
+async function copyContacts() {
+  const list = filtered();
+  const course = CONFIG.internalFields.includes("course");
+  const cell = (v) => String(v ?? "").replace(/[\t\r\n]+/g, " ");
+  const rows = [["店名", "電話番号", "住所", ...(course ? ["配送コース"] : []), "最終出荷日", "数量"],
+    ...list.map((s) => { const p = productOf(s, state.product);
+      return [s.name, s.tel, s.address, ...(course ? [s.course] : []), fullDate(p.last), p.qty]; })];
+  const text = `${state.product} を使っている店舗（${list.length} 店）\n` + rows.map((r) => r.map(cell).join("\t")).join("\n");
+  try { await navigator.clipboard.writeText(text); toast(`${list.length} 店舗の連絡先をコピーしました`); }
+  catch { toast("コピーできませんでした。ブラウザの設定を確認してください"); }
+}
+
+function applyFilter(fit) {
+  const list = filtered();
+  cluster.clearLayers();
+  cluster.addLayers(list.map((s) => markers.get(s)));
+  $("count").textContent = `${list.length} 件の${{ active: "店舗", stale: "要確認の店舗", closed: "終了店舗" }[state.view]}`;
+  $("prodbar").hidden = !state.product;
+  if (state.product) $("prodname").textContent = `「${state.product}」を使っている店舗 ${list.length} 件`;
+  $("copyContacts").disabled = !list.length;
+  $("list").innerHTML = list.length ? list.map((s, i) => `
+    <li class="card${isClosed(s) ? " is-closed" : ""}" data-i="${i}">
+      <div class="body">
+        <h3>${esc(s.name)}</h3>
+        ${isStale(s) ? `<div class="stale">${icon("info")}${esc(staleText(s))}</div>` : ""}
+        ${isClosed(s) ? `<div class="meta">${esc(closedText(s))}</div>` : ""}
+        <div class="meta"><span style="color:${pinColor(s)}">●</span> ${esc(s.type || "店舗")}${s.area ? `<span class="sep">·</span>${esc(s.area)}` : ""}${s.km != null ? `<span class="sep">·</span><span class="dist">${distText(s.km)}</span>` : ""}</div>
+        <div class="addr">${esc(s.address)}</div>
+        ${state.product && productOf(s, state.product) ? `<div class="pline">${icon("tag")}最終出荷 ${shortDate(productOf(s, state.product).last)}<span class="sep">·</span>数量 ${productOf(s, state.product).qty.toLocaleString()}</div>` : ""}
+        ${CONFIG.internalFields.map((k) => s[k] ? `<div class="meta inline">${icon(INTERNAL[k].icon)}${esc(s[k])}</div>` : "").join("")}
+        ${s.note ? `<div class="closed">${esc(s.note)}</div>` : ""}
+      </div>
+      <div class="side"><a class="route-mini" href="${routeUrl(s)}" target="_blank" rel="noopener" title="ルート" onclick="event.stopPropagation()">${icon("dir")}</a><small>ルート</small></div>
+    </li>`).join("") : `<li class="empty">条件に合う店舗がありません。<br>検索語や絞り込みを変えてみてください。</li>`;
+  $("list").querySelectorAll(".card").forEach((el) => {
+    const s = list[+el.dataset.i];
+    el.onclick = () => openDetail(s);
+    el.onmouseenter = () => markers.get(s).setIcon(pinIcon(s, true));
+    el.onmouseleave = () => { if (state.sel !== s) markers.get(s).setIcon(pinIcon(s, false)); };
+  });
+  if (fit && list.length) map.fitBounds(L.latLngBounds(list.map((s) => s.pos)), { maxZoom: 15, ...fitPadding() });
+}
+// パネル・シートに隠れない範囲に店舗が収まるようにする
+const fitPadding = () => innerWidth <= 760
+  ? { paddingTopLeft: [30, 130], paddingBottomRight: [30, innerHeight * 0.42 + 30] }
+  : { paddingTopLeft: [document.body.classList.contains("collapsed") ? 60 : 450, 80], paddingBottomRight: [70, 40] };
+
+function renderChips() {
+  const types = [...new Set(state.stores.map((s) => s.type).filter(Boolean))];
+  const areaCount = {}; state.stores.forEach((s) => s.area && (areaCount[s.area] = (areaCount[s.area] || 0) + 1));
+  const areas = Object.keys(areaCount).sort((a, b) => areaCount[b] - areaCount[a]);
+  const sel = (id, label, values) => `<select class="chip" id="${id}" aria-label="${label}"><option value="">${label}</option>${values.map((v) => `<option>${esc(v)}</option>`).join("")}</select>`;
+  const uniq = (k) => [...new Set(state.stores.map((s) => s[k]).filter(Boolean))].sort();
+  const nStale = state.stores.filter(isStale).length, nClosed = state.stores.filter(isClosed).length;
+  const viewChip = (v, label, n, cls) => `<button type="button" class="chip ${cls}" data-view="${v}" aria-pressed="${state.view === v}">${label} ${n}</button>`;
+  $("chips").innerHTML =
+    (nStale || state.view === "stale" ? viewChip("stale", `${icon("info")}要確認（${CONFIG.staleMonths}ヶ月以上出荷なし）`, nStale, "warn") : "") +
+    (nClosed || state.view === "closed" ? viewChip("closed", "終了店舗", nClosed, "gray") : "") +
+    types.map((t) => `<button type="button" class="chip" data-type="${esc(t)}" aria-pressed="${state.type === t}"><span class="dot" style="background:${colorOf(t)}"></span>${esc(t)}</button>`).join("") +
+    (CONFIG.productMonths && state.products.size
+      ? `<select class="chip" id="f-product" aria-label="商品で絞り込み" aria-pressed="${!!state.product}"><option value="">商品</option>${
+          productCounts().map(([n, c]) => `<option value="${esc(n)}">${esc(n)}（${c}店）</option>`).join("")}</select>` : "") +
+    sel("f-area", "エリア", areas) +
+    CONFIG.internalFields.map((k) => sel(`f-${k}`, INTERNAL[k].label, uniq(k))).join("");
+  $("chips").querySelectorAll("[data-view]").forEach((b) => b.onclick = () => {
+    state.view = state.view === b.dataset.view ? "active" : b.dataset.view;
+    renderChips(); showList(); applyFilter(true);
+  });
+  $("chips").querySelectorAll("[data-type]").forEach((b) => b.onclick = () => {
+    state.type = state.type === b.dataset.type ? null : b.dataset.type;
+    $("chips").querySelectorAll("[data-type]").forEach((x) => x.setAttribute("aria-pressed", state.type === x.dataset.type));
+    showList(); applyFilter(true);
+  });
+  for (const [id, key] of [["f-product", "product"], ["f-area", "area"], ["f-course", "course"], ["f-rep", "rep"]]) {
+    const el = $(id); if (!el) continue;
+    el.value = state[key];
+    el.onchange = () => { state[key] = el.value; el.setAttribute("aria-pressed", !!el.value); showList(); applyFilter(true); };
+  }
+}
+
+/* ===================== 詳細 ===================== */
+function openDetail(s, move = true) {
+  if (state.sel && markers.get(state.sel)) markers.get(state.sel).setIcon(pinIcon(state.sel, false));
+  state.sel = s;
+  const m = markers.get(s);
+  m.setIcon(pinIcon(s, true));
+  if (move) {   // 絞り込みでピンが隠れている店（終了店舗など）は、地図だけ移動する
+    if (cluster.hasLayer(m)) cluster.zoomToShowLayer(m, () => map.panTo(s.pos));
+    if (map.getZoom() < 15) map.setView(s.pos, 16); else if (!cluster.hasLayer(m)) map.panTo(s.pos);
+  }
+  document.body.classList.remove("collapsed");
+  if (innerWidth <= 760) document.body.classList.add("expanded");
+
+  const row = (ic, html, lbl) => html ? `<div class="row">${icon(ic)}<div>${lbl ? `<span class="lbl">${lbl}</span>` : ""}${html}</div></div>` : "";
+  const telHref = s.tel ? `tel:${s.tel.replace(/[^\d+]/g, "")}` : "";
+  $("detailview").innerHTML = `
+    <div class="dhead"><button class="iconbtn" id="back" type="button" aria-label="一覧に戻る">${icon("back")}</button></div>
+    <div class="dtitle">
+      <h2>${esc(s.name)}</h2>
+      <div class="meta"><span style="color:${pinColor(s)}">●</span> ${esc(s.type || "店舗")}${s.area ? `<span class="sep">·</span>${esc(s.area)}` : ""}${s.km != null ? `<span class="sep">·</span>${distText(s.km)}` : ""}</div>
+    </div>
+    <div class="actions">
+      <a class="act primary" href="${routeUrl(s)}" target="_blank" rel="noopener"><span class="circ">${icon("dir")}</span>ルート</a>
+      ${s.tel ? `<a class="act" href="${telHref}"><span class="circ">${icon("phone")}</span>電話</a>` : ""}
+      <button class="act" type="button" id="copyaddr"><span class="circ">${icon("copy")}</span>住所をコピー</button>
+      ${s.url ? `<a class="act" href="${esc(s.url)}" target="_blank" rel="noopener"><span class="circ">${icon("link")}</span>ウェブサイト</a>` : ""}
+    </div>
+    ${isClosed(s) ? `<div class="alert gray">${icon("info")}<div>${esc(closedText(s))}</div></div>` : ""}
+    ${isStale(s) ? `<div class="alert warn">${icon("info")}<div><b>${esc(staleText(s))}</b><br>取引が止まっていないか確認してください。閉店していたら管理者が「終了店舗」に登録します。</div></div>` : ""}
+    ${s.note ? `<div class="alert">${icon("info")}<div>${esc(s.note)}</div></div>` : ""}
+    <div class="rows">
+      ${row("place", esc(s.address))}
+      ${row("star", esc(s.recommend), "おすすめ")}
+      ${row("clock", esc(s.hours) + (s.holiday ? `<br><span class="meta">定休日：${esc(s.holiday)}</span>` : ""))}
+      ${row("phone", s.tel ? `<a href="${telHref}">${esc(s.tel)}</a>` : "")}
+      ${row("link", s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url.replace(/^https?:\/\//, ""))}</a>` : "")}
+    </div>
+    ${CONFIG.internalFields.length ? `<div class="internal"><div class="cap">社内情報</div><div class="rows">
+      ${row("tag", esc(s.code), "得意先コード")}${CONFIG.internalFields.map((k) => row(INTERNAL[k].icon, esc(s[k]), INTERNAL[k].label)).join("")}
+      ${row("clock", fullDate(lastShipOf(s)), "最終出荷日")}
+    </div></div>` : ""}
+    ${productBlock(s)}
+    ${location.hash === "#admin" ? adminBox(s) : ""}`;
+  wireAdminBox(s);
+  $("detailview").querySelectorAll("[data-prod]").forEach((b) => b.onclick = () => selectProduct(b.dataset.prod));
+  $("listview").hidden = true; $("detailview").hidden = false; $("detailview").scrollTop = 0;
+  $("back").onclick = showList;
+  $("copyaddr").onclick = async () => {
+    try { await navigator.clipboard.writeText(s.address); toast("住所をコピーしました"); }
+    catch { toast("コピーできませんでした：" + s.address); }
+  };
+}
+function showList() {
+  if (state.sel && markers.get(state.sel)) markers.get(state.sel).setIcon(pinIcon(state.sel, false));
+  state.sel = null;
+  $("detailview").hidden = true; $("listview").hidden = false;
+}
+
+/* ===================== 検索・現在地・パネル ===================== */
+let qTimer;
+$("q").addEventListener("input", (e) => {
+  $("clearq").hidden = !e.target.value;
+  clearTimeout(qTimer); qTimer = setTimeout(() => { state.q = e.target.value.trim(); showList(); applyFilter(true); }, 200);
+});
+$("q").addEventListener("keydown", (e) => { if (e.key === "Enter") { const l = filtered(); if (l.length === 1) openDetail(l[0]); } });
+$("clearq").onclick = () => { $("q").value = ""; $("clearq").hidden = true; state.q = ""; applyFilter(true); $("q").focus(); };
+$("searchbtn").onclick = () => { state.q = $("q").value.trim(); showList(); applyFilter(true); };
+$("toggle").onclick = () => document.body.classList.toggle("collapsed");
+$("handle").onclick = () => {
+  const b = document.body.classList;
+  if (b.contains("collapsed")) b.remove("collapsed"); else if (b.contains("expanded")) b.replace("expanded", "collapsed"); else b.add("expanded");
+};
+$("nearby").onclick = locate;
+$("copyContacts").onclick = copyContacts;
+$("clearProduct").onclick = () => selectProduct("");
+
+function locate() {
+  if (!navigator.geolocation) return toast("このブラウザでは現在地を取得できません");
+  toast("現在地を取得しています…");
+  navigator.geolocation.getCurrentPosition((p) => {
+    state.here = [p.coords.latitude, p.coords.longitude];
+    hereMarker?.remove();
+    hereMarker = L.marker(state.here, { icon: L.divIcon({ className: "", html: '<div class="here"></div>', iconSize: [18, 18] }), zIndexOffset: 1000 }).addTo(map);
+    $("locate")?.classList.add("on");
+    $("nearby").textContent = "近い順に表示中";
+    showList(); applyFilter(false);
+    map.setView(state.here, 13);
+    $("toast").hidden = true;
+  }, () => toast("現在地を取得できませんでした。位置情報の許可を確認してください"), { enableHighAccuracy: true, timeout: 10000 });
+}
+
+/* ===================== 管理者：データ更新（URL末尾に #admin） ===================== */
+const syncAdmin = () => { $("admin").hidden = location.hash !== "#admin"; };
+addEventListener("hashchange", syncAdmin); syncAdmin();
+
+async function importFile(file) {
+  const msg = $("adminmsg"), prog = $("prog");
+  $("save").disabled = true; msg.textContent = "読み込み中…";
+  try {
+    const { header, objs, preamble } = readTable(await file.arrayBuffer());
+    if (header.includes("商品名1") || header.includes("商品名")) return importSales(file, header, objs, preamble);
+    const isMaster = header.includes("得意先名1");
+    const stores = objs.map((o) => isMaster ? fromMaster(o) : fromPublished(o, header)).filter(Boolean);
+    // 公開中の stores.csv から、手で入れた項目（営業時間・お知らせ等）と位置を得意先コードで引き継ぐ
+    const prev = new Map(state.published.filter((s) => s.code).map((s) => [s.code, s]));
+    let kept = 0;
+    for (const s of stores) {
+      const p = prev.get(s.code);
+      if (!p) continue;
+      // 手入力の項目と、地図で登録した「終了」・最終出荷日は、得意先マスタを取り込み直しても残す
+      for (const k of ["hours", "holiday", "recommend", "url", "note", "status", "closedDate", "lastShip"]) if (!s[k] && p[k]) s[k] = p[k];
+      if (!s.pos && p.pos && p.address === s.address) { s.pos = p.pos; kept++; }
+    }
+    prog.hidden = false; prog.value = 0;
+    const total = stores.filter((s) => !s.pos && s.geoAddress).length;
+    prog.max = Math.max(total, 1);
+    msg.textContent = `${stores.length} 店舗の位置を確認しています…`;
+    await resolvePositions(stores, (n) => { prog.value = n; msg.textContent = `住所から位置を割り出しています… ${n} / ${total}`; });
+    prog.hidden = true;
+    // 位置が分からないのを知らせるのは取引中の店舗だけ（終了店舗は地図に出さないので問題にならない）
+    const failed = stores.filter((s) => !s.pos && !isClosed(s));
+    setPending("stores", storesTable(stores));
+    setStores(stores); showList();
+    const nClosed = stores.filter(isClosed).length;
+    const skipped = isMaster ? objs.filter((o) => o["得意先名1"]).length - stores.length : 0;
+    msg.innerHTML = `「${esc(file.name)}」から 取引中 <b>${stores.length - nClosed} 店舗</b>・終了 <b>${nClosed} 店舗</b>を取り込みました（この画面だけの確認表示です）。` +
+      (skipped ? `<br>本部・催事など地図に載せない ${skipped} 件は除外しました。` : "") +
+      (failed.length ? `<br><span class="err">位置が分からなかった店舗：${failed.map((s) => esc(s.name)).join("、")}。保存したデータの緯度・経度を直接入力してください。</span>` : "");
+  } catch (e) {
+    prog.hidden = true;
+    msg.innerHTML = `<span class="err">読み込めませんでした。${esc(e.message)}</span>`;
+  }
+}
+
+/* 売上明細（または products.csv）の取り込み：公開中の products.csv に追記する */
+function importSales(file, header, objs, preamble) {
+  const msg = $("adminmsg");
+  const add = header.includes("商品名1") ? fromSales(objs, preamble)
+    : (() => { const rows = fromProductsCsv(objs); const d = rows.map((r) => r.date).sort(); return { rows, from: d[0], to: d.at(-1) }; })();
+  if (!add.rows.length) throw new Error("出荷日・得意先・商品名のそろった行がありません。");
+  const merged = mergeSales(state.sales, add);
+  setSales(merged);
+  setPending("products", productsTable(merged));
+  if (updateLastShip()) setPending("stores", storesTable(allStores()));   // 最終出荷日も一緒に保存する
+  refreshAll();
+  const onMap = new Set(state.stores.map((s) => s.code));
+  const shops = new Set(add.rows.map((r) => r.code));
+  const outside = [...shops].filter((c) => !onMap.has(c)).length;
+  const { from, to } = state.productRange;
+  msg.innerHTML = `「${esc(file.name)}」の ${shortDate(add.from)}〜${shortDate(add.to)} 出荷分（${shops.size} 店舗）を取り込みました。` +
+    `<br>地図には ${shortDate(from)}〜${shortDate(to)} に出荷した商品を表示しています（この画面だけの確認表示です）。` +
+    (outside ? `<br>地図にない得意先（終了・本部など）の ${outside} 件は表示されません。` : "");
+}
+
+/* 取り込んだ内容は、確認してから「保存」で反映する */
+// 保存待ちの表は種類ごとに持つ（売上明細の取り込みでは、使用商品と店舗の最終出荷日の両方が変わる）
+const SAVE_LABEL = { stores: "店舗", products: "使用商品" };
+function setPending(kind, table) {
+  state.pending[kind] = table;
+  const kinds = Object.keys(state.pending);
+  $("savename").textContent = API_URL ? `${kinds.map((k) => SAVE_LABEL[k]).join("・")}をサーバーに保存` : kinds.map((k) => `${k}.csv`).join("・") + " を保存";
+  $("save").disabled = false;
+}
+
+function storesTable(stores) {
+  const headerJa = OUT_COLS.map((k) => FIELDS[k][0]);
+  const rows = stores.map((s) => OUT_COLS.map((k) => k === "lat" ? (s.pos ? s.pos[0].toFixed(6) : "") : k === "lng" ? (s.pos ? s.pos[1].toFixed(6) : "") : String(s[k] ?? "")));
+  return [headerJa, ...rows];
+}
+$("save").onclick = () => savePending();
+async function savePending() {
+  const kinds = Object.keys(state.pending);
+  if (!kinds.length) return;
+  if (!API_URL) {   // サーバー未設定のときは CSV ファイルとして保存
+    for (const k of kinds) {
+      const blob = new Blob(["﻿" + Papa.unparse(state.pending[k], { newline: "\r\n" })], { type: "text/csv" });
+      const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `${k}.csv` });
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+    state.pending = {};
+    return toast(kinds.map((k) => `${k}.csv`).join("・") + " を保存しました");
+  }
+  password ||= pwStore.get();
+  if (!password) return showLogin("");   // 合言葉を入れると、そのまま保存を続ける
+  $("save").disabled = true;
+  toast("サーバーに保存しています…");
+  try {
+    for (const k of kinds) {
+      await call(k === "stores" ? "saveStores" : "saveProducts", state.pending[k]);
+      if (k === "stores") state.published = allStores();
+      delete state.pending[k];
+    }
+    $("savename").textContent = "保存済み";
+    toast("保存しました。全員の地図に反映されます");
+  } catch (e) {
+    $("save").disabled = false;
+    if (e.auth) showLogin(e.message);
+    else toast("保存できませんでした：" + e.message);
+  }
+}
+
+/* 管理者：店舗の詳細から「終了店舗」に登録・取り消し（すぐサーバーに保存） */
+function adminBox(s) {
+  return `<div class="adminbox"><div class="cap2">管理者メニュー</div>
+    ${isClosed(s)
+      ? `<div>終了店舗として登録されています。取引を再開したら元に戻せます。</div>
+         <div class="row2"><button type="button" class="btn ghost" id="reopenShop">取引中に戻す</button></div>`
+      : `<div class="row2"><button type="button" class="btn ghost" id="closeShop">終了店舗にする</button></div>
+         <div id="closeConfirm" hidden>「${esc(s.name)}」を終了店舗にします。地図と一覧から外れます（「終了店舗」の絞り込みで確認・取り消しできます）。
+           <div class="row2" style="margin-top:8px"><button type="button" class="btn danger" id="closeYes">終了店舗にする</button><button type="button" class="btn ghost" id="closeNo">やめる</button></div></div>`}
+  </div>`;
+}
+function wireAdminBox(s) {
+  const setStatus = (status) => {
+    s.status = status; s.closedDate = status ? todayIso() : "";
+    setPending("stores", storesTable(allStores()));
+    markers.get(s).setIcon(pinIcon(s, true));
+    refreshAll();
+    savePending();
+  };
+  $("closeShop")?.addEventListener("click", () => { $("closeConfirm").hidden = false; $("closeShop").hidden = true; });
+  $("closeNo")?.addEventListener("click", () => { $("closeConfirm").hidden = true; $("closeShop").hidden = false; });
+  $("closeYes")?.addEventListener("click", () => setStatus(CLOSED));
+  $("reopenShop")?.addEventListener("click", () => setStatus(""));
+}
+$("drop").onclick = () => $("file").click();
+$("drop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
+$("file").onchange = (e) => { if (e.target.files[0]) importFile(e.target.files[0]); e.target.value = ""; };
+["dragover", "dragenter"].forEach((t) => $("drop").addEventListener(t, (e) => { e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave", "drop"].forEach((t) => $("drop").addEventListener(t, () => $("drop").classList.remove("over")));
+$("drop").addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer.files[0]) importFile(e.dataTransfer.files[0]); });
+
+/* ===================== サーバー（GAS）呼び出し ===================== */
+let password = "";
+const pwStore = {
+  get() { try { return localStorage.getItem(PW_KEY) || sessionStorage.getItem(PW_KEY) || ""; } catch { return ""; } },
+  set(v, remember) { try { (remember ? localStorage : sessionStorage).setItem(PW_KEY, v); } catch {} },
+  clear() { try { localStorage.removeItem(PW_KEY); sessionStorage.removeItem(PW_KEY); } catch {} },
+};
+
+async function call(fn, ...args) {
+  let res;
+  try {
+    // text/plain で送ると、ブラウザの事前確認（CORS プリフライト）なしで GAS に届く
+    res = await fetch(API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ password, fn, args }) });
+  } catch {
+    throw new Error("サーバーに接続できません。ネットワークを確認してください");
+  }
+  if (!res.ok) throw new Error(`サーバーエラー（${res.status}）`);
+  const data = await res.json();
+  if (data.auth === false) {   // 管理者の合言葉が違う（保存のときだけ起きる）
+    pwStore.clear(); password = "";
+    throw Object.assign(new Error(data.error || "管理者の合言葉が違います"), { auth: true });
+  }
+  if (!data.ok) throw new Error(data.error || "不明なエラー");
+  return data.result;
+}
+
+function showLogin(msg) {
+  $("loginErr").textContent = msg || "";
+  $("login").hidden = false;
+  $("pw").value = "";
+  $("pw").focus();
+}
+$("loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  password = $("pw").value;
+  $("loginBtn").disabled = true; $("loginErr").textContent = "確認しています…";
+  try {
+    await call("checkAdmin");
+    pwStore.set(password, $("remember").checked);
+    $("login").hidden = true;
+    savePending();
+  } catch (err) {
+    $("loginErr").textContent = err.message;
+  } finally {
+    $("loginBtn").disabled = false;
+  }
+});
+$("loginCancel").onclick = () => { $("login").hidden = true; };
+$("logout").onclick = () => { pwStore.clear(); password = ""; toast("このPCの管理者の合言葉を消しました"); };
+
+/* ===================== 起動：店舗・使用商品を読み込む ===================== */
+const tableToObjs = (t) => {
+  const header = (t?.[0] || []).map((h) => String(h).trim());
+  return { header, objs: (t || []).slice(1).map((r) => Object.fromEntries(header.map((h, i) => [h, String(r[i] ?? "").trim()]))) };
+};
+async function fetchTable(path) {
+  const res = await fetch(path, { cache: "no-cache" });
+  if (!res.ok) throw new Error(`${path} が見つかりません`);
+  return readTable(await res.arrayBuffer());
+}
+
+async function start() {
+  $("count").textContent = "読み込み中…";
+  try {
+    let storesData, productsData = null;
+    if (API_URL) {
+      const d = await call("getData");
+      storesData = tableToObjs(d.stores);
+      productsData = tableToObjs(d.products);
+      $("dblink").href = d.dbUrl; $("dblink").hidden = !d.dbUrl;
+    } else {
+      storesData = await fetchTable(CONFIG.csvPath);
+      if (CONFIG.productMonths) productsData = await fetchTable(CONFIG.productsPath).catch(() => null);
+    }
+    const { header, objs } = storesData;
+    const isMaster = header.includes("得意先名1");   // 得意先マスタをそのまま置いた場合にも対応
+    const stores = objs.map((o) => isMaster ? fromMaster(o) : fromPublished(o, header)).filter(Boolean);
+    if (!stores.length) throw new Error("店舗データが空です");
+    await resolvePositions(stores);
+    state.published = stores;
+    if (CONFIG.productMonths && productsData) setSales(pruneSales(fromProductsCsv(productsData.objs)));
+    setStores(stores);
+  } catch (e) {
+    $("count").textContent = "店舗データを読み込めませんでした";
+    $("list").innerHTML = `<li class="empty">${esc(e.message)}<br>管理者は URL の末尾に #admin を付けて開き、得意先マスタを取り込んでください。</li>`;
+  }
+}
+
+$("logout").hidden = !API_URL;
+start();   // 地図の閲覧に合言葉は不要
+</script>
+</body>
+</html>
