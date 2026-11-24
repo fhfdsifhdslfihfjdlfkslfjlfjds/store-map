@@ -168,7 +168,10 @@ button.pname:hover { text-decoration: underline; }
 .prods li .pmeta { margin-left: auto; }
 .pdel { border: 1px solid var(--line); background: #fff; color: var(--sub); border-radius: 12px; font-size: 11px; padding: 1px 8px; flex: none; }
 .pdel:hover { color: var(--red); border-color: var(--red); }
-.pconfirm { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--red); flex: none; white-space: nowrap; }
+/* 確認は商品名の下に1行で出す（商品名が押しつぶされて縦書きにならないように） */
+.prods li { flex-wrap: wrap; }
+.prods li .pname { flex: 1 1 8em; }
+.pconfirm { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 12px; color: var(--red); flex: 1 0 100%; white-space: nowrap; padding-top: 4px; }
 .pconfirm button { border-radius: 12px; font-size: 11px; padding: 1px 8px; border: 1px solid var(--line); background: #fff; }
 .pconfirm .pyes { background: var(--red); border-color: var(--red); color: #fff; }
 .padd { display: flex; gap: 8px; padding: 4px 24px 6px; }
@@ -236,6 +239,13 @@ body:not(.collapsed) .leaflet-bottom.leaflet-left { left: var(--panel-w); }
 /* ピン */
 .gpin { filter: drop-shadow(0 1px 1.5px rgba(0,0,0,.35)); transition: transform .15s; transform-origin: 50% 100%; }
 .gpin.sel { transform: scale(1.35); }
+.gpin.chosen { transform: scale(1.6); filter: drop-shadow(0 2px 4px rgba(0,0,0,.45)); }
+.pinwrap { position: relative; width: 31px; height: 43px; }
+.halo { position: absolute; left: 13.5px; bottom: 0; width: 44px; height: 18px; margin: 0 0 -9px -22px; border-radius: 50%;
+  background: var(--c); opacity: .35; animation: halo 1.6s ease-out infinite; pointer-events: none; }
+@keyframes halo { 0% { transform: scale(.4); opacity: .55; } 100% { transform: scale(1.6); opacity: 0; } }
+.pin-label.sel { display: block !important; background: #fff; color: var(--ink); font-weight: 700; font-size: 13px; padding: 3px 10px;
+  border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.35); text-shadow: none; margin-left: 10px; z-index: 1000; }
 .pin-label { background: none; border: 0; box-shadow: none; padding: 0 0 0 2px; font: 500 12px var(--font); color: var(--c, #b31412);
   text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff, 0 0 3px #fff; white-space: nowrap; }
 .pin-label::before { display: none; }
@@ -267,7 +277,7 @@ body:not(.collapsed) .leaflet-bottom.leaflet-left { left: var(--panel-w); }
   .layerbtn { width: 56px; height: 56px; }
   .layerbtn span { font-size: 10px; }
 }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } .halo { animation: none; } }
 </style>
 </head>
 <body>
@@ -513,9 +523,20 @@ const CLOSED_COLOR = "#9aa0a6";
 const pinColor = (s) => isClosed(s) ? CLOSED_COLOR : colorOf(s.type);
 // 要確認の店は、ピンの右上に黄色い「!」を付ける
 function pinIcon(s, sel) {
+  const chosen = sel && state.sel === s;   // 詳細を開いている店（マウスを乗せただけの店は少し大きくするだけ）
   const badge = isStale(s) ? `<circle cx="24" cy="6.5" r="6" fill="#fbbc04" stroke="#fff" stroke-width="1.5"/><text x="24" y="10.2" text-anchor="middle" font-size="10" font-weight="700" font-family="Arial,sans-serif" fill="#202124">!</text>` : "";
-  const svg = `<svg class="gpin${sel ? " sel" : ""}" width="31" height="43" viewBox="0 0 31 43"><path fill="${pinColor(s)}" stroke="rgba(0,0,0,.25)" d="M13.5 1C6.6 1 1 6.6 1 13.5 1 23 13.5 42 13.5 42S26 23 26 13.5C26 6.6 20.4 1 13.5 1z"/><circle cx="13.5" cy="13.5" r="5.2" fill="rgba(0,0,0,.28)"/>${badge}</svg>`;
-  return L.divIcon({ className: "", html: svg, iconSize: [31, 43], iconAnchor: [13.5, 42], tooltipAnchor: [12, -28] });
+  const svg = `<svg class="gpin${sel ? " sel" : ""}${chosen ? " chosen" : ""}" width="31" height="43" viewBox="0 0 31 43"><path fill="${pinColor(s)}" stroke="${chosen ? "#fff" : "rgba(0,0,0,.25)"}" stroke-width="${chosen ? 2 : 1}" d="M13.5 1C6.6 1 1 6.6 1 13.5 1 23 13.5 42 13.5 42S26 23 26 13.5C26 6.6 20.4 1 13.5 1z"/><circle cx="13.5" cy="13.5" r="5.2" fill="${chosen ? "#fff" : "rgba(0,0,0,.28)"}"/>${badge}</svg>`;
+  // 選択中は足もとに広がる輪を付けて、どの店か一目で分かるようにする
+  const html = chosen ? `<div class="pinwrap" style="--c:${pinColor(s)}"><span class="halo"></span>${svg}</div>` : svg;
+  return L.divIcon({ className: "", html, iconSize: [31, 43], iconAnchor: [13.5, 42], tooltipAnchor: [12, -28] });
+}
+// 選択中の店：ピンを大きく手前に、店名ラベルを白地の太字に（縮小していても表示）
+function highlight(s, on) {
+  const m = markers.get(s);
+  if (!m) return;
+  m.setIcon(pinIcon(s, on));
+  m.setZIndexOffset(on ? 5000 : 0);
+  m.getTooltip()?.getElement()?.classList.toggle("sel", on);
 }
 
 /* ===================== 状態 ===================== */
@@ -734,6 +755,7 @@ function updateLastShip() {
 // 状態が変わったときに、ピン・絞り込み・一覧・詳細をまとめて描き直す
 function refreshAll() {
   for (const [s, m] of markers) m.setIcon(pinIcon(s, s === state.sel));
+  if (state.sel) highlight(state.sel, true);
   renderChips(); applyFilter(false);
   if (state.sel && !$("detailview").hidden) openDetail(state.sel, false);
 }
@@ -831,7 +853,11 @@ function setStores(stores) {
   for (const s of state.stores) {
     const m = L.marker(s.pos, { icon: pinIcon(s, false), title: s.name, riseOnHover: true });
     m.bindTooltip(esc(s.name), { permanent: true, direction: "right", className: "pin-label", interactive: false });
-    m.on("add", () => m.getTooltip()?.getElement()?.style.setProperty("--c", pinColor(s)));
+    m.on("add", () => {
+      const el = m.getTooltip()?.getElement();
+      el?.style.setProperty("--c", pinColor(s));
+      el?.classList.toggle("sel", state.sel === s);   // まとめ表示から戻ったときも、選択中の目印を保つ
+    });
     m.on("click", () => openDetail(s));
     markers.set(s, m);
   }
@@ -960,10 +986,10 @@ function renderChips() {
 /* ===================== 詳細 ===================== */
 function openDetail(s, move = true) {
   removeFormMarker();
-  if (state.sel && markers.get(state.sel)) markers.get(state.sel).setIcon(pinIcon(state.sel, false));
+  if (state.sel && state.sel !== s) highlight(state.sel, false);
   state.sel = s;
   const m = markers.get(s);
-  m.setIcon(pinIcon(s, true));
+  highlight(s, true);
   if (move) {   // 絞り込みでピンが隠れている店（終了店舗など）は、地図だけ移動する
     if (cluster.hasLayer(m)) cluster.zoomToShowLayer(m, () => map.panTo(s.pos));
     if (map.getZoom() < 15) map.setView(s.pos, 16); else if (!cluster.hasLayer(m)) map.panTo(s.pos);
@@ -1013,7 +1039,7 @@ function openDetail(s, move = true) {
 }
 function showList() {
   removeFormMarker();
-  if (state.sel && markers.get(state.sel)) markers.get(state.sel).setIcon(pinIcon(state.sel, false));
+  if (state.sel) highlight(state.sel, false);
   state.sel = null;
   $("detailview").hidden = true; $("listview").hidden = false;
 }
@@ -1299,7 +1325,7 @@ const prefOf = (addr) => { const m = addr.match(/^(.{2,3}?)[都道府県]/); ret
 
 function openPlaceForm(s) {
   removeFormMarker();
-  if (state.sel && markers.get(state.sel)) markers.get(state.sel).setIcon(pinIcon(state.sel, false));
+  if (state.sel) highlight(state.sel, false);
   const fromMaster = s && !isManual(s);   // 得意先マスタから取り込んだ店
   const types = [...new Set([...PLACE_TYPES, ...allStores().map((x) => x.type).filter(Boolean)])];
   const courses = [...new Set(allStores().map((x) => x.course).filter(Boolean))].sort();
