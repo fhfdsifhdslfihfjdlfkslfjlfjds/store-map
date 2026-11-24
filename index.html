@@ -418,6 +418,12 @@ function simplifyStyle(st) {
   });
   for (const l of st.layers) {
     const sl = l["source-layer"], p = (l.paint ||= {});
+    // 地理院のスタイルはズーム17以上で「道路縁」などの細かい描き方に切り替わる（ここでは外している）。
+    // そのままだと拡大したときに道路・鉄道・水域が消えるので、17以上もズーム16と同じ描き方で描き続ける
+    if (["RdCL", "RailCL", "WA"].includes(sl)) {
+      if (l.maxzoom === 17) delete l.maxzoom;
+      if (Array.isArray(l.filter) && l.filter[0] === "step" && JSON.stringify(l.filter[1]) === '["zoom"]') l.filter = l.filter[2];
+    }
     if (l.type === "background") p["background-color"] = ["step", ["zoom"], LAND, 4, WATER, 8, LAND];
     else if (sl === "AdmArea") p["fill-color"] = LAND;
     else if (sl === "WA") p["fill-color"] = WATER;
