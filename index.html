@@ -155,10 +155,18 @@ button.pname:hover { text-decoration: underline; }
 .noprod { margin: 0; padding: 8px 24px 14px; color: var(--sub); font-size: 13px; }
 
 /* ---- 管理者 ---- */
-#admin { margin: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; display: grid; gap: 10px; }
-#admin h4 { margin: 0; font-size: 14px; font-weight: 500; }
+#admin { margin: 12px 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.adminhead { width: 100%; display: flex; align-items: center; gap: 8px; padding: 12px 16px; border: 0; background: none; font-size: 14px; font-weight: 500; text-align: left; }
+.adminhead .chev { margin-left: auto; color: var(--sub); transition: transform .2s; }
+.adminhead[aria-expanded="false"] .chev { transform: rotate(180deg); }
+.badge { background: #fce8e6; color: var(--red); font-size: 11px; font-weight: 500; border-radius: 10px; padding: 1px 8px; }
+.adminbody { display: grid; gap: 10px; padding: 0 16px 16px; }
 #admin p { margin: 0; color: var(--sub); font-size: 13px; }
-#drop { border: 2px dashed var(--line); border-radius: 8px; padding: 18px 12px; text-align: center; color: var(--sub); cursor: pointer; }
+#drop { border: 2px dashed var(--line); border-radius: 8px; padding: 14px 12px; text-align: center; color: var(--sub); cursor: pointer; }
+#drop small { font-size: 11px; }
+#dropOverlay { position: fixed; inset: 0; z-index: 3000; background: rgba(26,115,232,.18); border: 4px dashed var(--blue); display: grid; place-items: center; pointer-events: none; }
+#dropOverlay div { background: #fff; border-radius: 12px; padding: 20px 28px; font-size: 18px; font-weight: 500; color: #174ea6; box-shadow: 0 4px 16px rgba(0,0,0,.2); display: grid; gap: 4px; text-align: center; }
+#dropOverlay small { font-size: 12px; font-weight: 400; color: var(--sub); }
 #drop.over { border-color: var(--blue); background: var(--blue-soft); }
 .btn { height: 36px; border-radius: 18px; border: 0; padding: 0 18px; background: var(--blue); color: #fff; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; justify-self: start; }
 .btn:disabled { background: var(--line); color: var(--sub); cursor: default; }
@@ -233,6 +241,24 @@ body:not(.collapsed) .leaflet-bottom.leaflet-left { left: var(--panel-w); }
   <button id="toggle" type="button" aria-label="パネルを閉じる／開く"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg></button>
 
   <div class="view" id="listview">
+    <!-- 管理者用 URL のときだけ出す。一覧の上に置いて、スクロールせずに使えるようにする -->
+    <section id="admin" hidden>
+      <button type="button" class="adminhead" id="adminToggle" aria-expanded="true" aria-controls="adminBody">
+        <span>データ更新（管理者）</span><span class="badge" id="unsaved" hidden>未保存</span>
+        <svg class="i chev" viewBox="0 0 24 24"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>
+      </button>
+      <div class="adminbody" id="adminBody">
+        <p><b>店舗の更新</b>：得意先マスタ（Excel または CSV）をドロップ。終了・本部・催事は自動で除外し、住所から位置を割り出します。<br>
+          <b>使用商品の更新（週1回）</b>：売上明細をドロップ。今までの分に追記し、直近3ヶ月より古い分は自動で消えます。</p>
+        <div id="drop" tabindex="0" role="button">ここにファイルをドロップ<br>またはクリックして選択<br><small>（地図の上など、画面のどこに落としても取り込めます）</small></div>
+        <input id="file" type="file" accept=".csv,.xlsx,.xls,text/csv" hidden>
+        <progress id="prog" value="0" max="1" hidden></progress>
+        <div id="adminmsg"></div>
+        <button class="btn" id="save" type="button" disabled><svg class="i" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg><span id="savename">保存</span></button>
+        <p>取り込んだ内容を地図で確認してから保存してください。保存すると全員の地図に反映されます。</p>
+        <p><a id="dblink" href="#" target="_blank" rel="noopener" hidden>データのスプレッドシートを開く</a></p>
+      </div>
+    </section>
     <div class="listhead"><span id="count">読み込み中…</span><button type="button" id="nearby">現在地から近い順</button></div>
     <div class="prodbar" id="prodbar" hidden>
       <div id="prodname"></div>
@@ -243,23 +269,12 @@ body:not(.collapsed) .leaflet-bottom.leaflet-left { left: var(--panel-w); }
       <p>店名・電話番号・住所などをタブ区切りでコピーします。Excel やメールにそのまま貼り付けられます。</p>
     </div>
     <ul id="list"></ul>
-    <section id="admin" hidden>
-      <h4>データ更新（管理者）</h4>
-      <p><b>店舗の更新</b>：得意先マスタ（Excel または CSV）をドロップ。終了・本部・催事は自動で除外し、住所から位置を割り出します。<br>
-        <b>使用商品の更新（週1回）</b>：売上明細をドロップ。今までの分に追記し、直近3ヶ月より古い分は自動で消えます。</p>
-      <div id="drop" tabindex="0" role="button">ここにファイルをドロップ<br>またはクリックして選択</div>
-      <input id="file" type="file" accept=".csv,.xlsx,.xls,text/csv" hidden>
-      <progress id="prog" value="0" max="1" hidden></progress>
-      <div id="adminmsg"></div>
-      <button class="btn" id="save" type="button" disabled><svg class="i" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg><span id="savename">保存</span></button>
-      <p>取り込んだ内容を地図で確認してから保存してください。保存すると全員の地図に反映されます。</p>
-      <p><a id="dblink" href="#" target="_blank" rel="noopener" hidden>データのスプレッドシートを開く</a></p>
-    </section>
   </div>
   <div class="view" id="detailview" hidden></div>
 </aside>
 
 <div id="toast" hidden></div>
+<div id="dropOverlay" hidden><div>ここで離すと取り込みます<small>得意先マスタ／売上明細（Excel・CSV）</small></div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.min.js"></script>
@@ -923,6 +938,7 @@ addEventListener("hashchange", syncAdmin);
 
 async function importFile(file) {
   const msg = $("adminmsg"), prog = $("prog");
+  setAdminOpen(true);   // たたんでいても、取り込み中・結果のメッセージが見えるように開く
   $("save").disabled = true; msg.textContent = "読み込み中…";
   try {
     const { header, objs, preamble } = readTable(await file.arrayBuffer());
@@ -992,6 +1008,8 @@ function setPending(kind, table) {
   const kinds = Object.keys(state.pending);
   $("savename").textContent = API_URL ? `${kinds.map((k) => SAVE_LABEL[k]).join("・")}をサーバーに保存` : kinds.map((k) => `${k}.csv`).join("・") + " を保存";
   $("save").disabled = false;
+  $("unsaved").hidden = false;
+  setAdminOpen(true);
 }
 
 function storesTable(stores) {
@@ -1010,6 +1028,7 @@ async function savePending() {
       document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }
     state.pending = {};
+    $("unsaved").hidden = true;
     return toast(kinds.map((k) => `${k}.csv`).join("・") + " を保存しました");
   }
   if (!isAdmin) return toast("保存できるのは管理者用の URL を開いたときだけです");
@@ -1022,6 +1041,7 @@ async function savePending() {
       delete state.pending[k];
     }
     $("savename").textContent = "保存済み";
+    $("unsaved").hidden = true;
     toast("保存しました。全員の地図に反映されます");
   } catch (e) {
     $("save").disabled = false;
@@ -1056,9 +1076,28 @@ function wireAdminBox(s) {
 $("drop").onclick = () => $("file").click();
 $("drop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
 $("file").onchange = (e) => { if (e.target.files[0]) importFile(e.target.files[0]); e.target.value = ""; };
-["dragover", "dragenter"].forEach((t) => $("drop").addEventListener(t, (e) => { e.preventDefault(); $("drop").classList.add("over"); }));
-["dragleave", "drop"].forEach((t) => $("drop").addEventListener(t, () => $("drop").classList.remove("over")));
-$("drop").addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer.files[0]) importFile(e.dataTransfer.files[0]); });
+
+/* データ更新欄の開閉（たたんだ状態はこのPCに記憶） */
+const ADMIN_OPEN_KEY = "store-map-admin-open";
+function setAdminOpen(open, remember = false) {
+  $("adminBody").hidden = !open;
+  $("adminToggle").setAttribute("aria-expanded", open);
+  if (remember) try { localStorage.setItem(ADMIN_OPEN_KEY, open ? "1" : "0"); } catch {}
+}
+$("adminToggle").onclick = () => setAdminOpen($("adminBody").hidden, true);
+try { if (localStorage.getItem(ADMIN_OPEN_KEY) === "0") setAdminOpen(false); } catch {}
+
+/* 管理者用 URL のときは、画面のどこにファイルを落としても取り込む（地図のドラッグ操作には反応しない） */
+let dragDepth = 0;
+const isFileDrag = (e) => isAdmin && [...(e.dataTransfer?.types || [])].includes("Files");
+addEventListener("dragenter", (e) => { if (!isFileDrag(e)) return; e.preventDefault(); dragDepth++; $("dropOverlay").hidden = false; });
+addEventListener("dragover", (e) => { if (isFileDrag(e)) e.preventDefault(); });
+addEventListener("dragleave", (e) => { if (!isFileDrag(e)) return; if (--dragDepth <= 0) { dragDepth = 0; $("dropOverlay").hidden = true; } });
+addEventListener("drop", (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault(); dragDepth = 0; $("dropOverlay").hidden = true;
+  if (e.dataTransfer.files[0]) importFile(e.dataTransfer.files[0]);
+});
 
 /* ===================== サーバー（GAS）呼び出し ===================== */
 // 保存に使う管理者の鍵（管理者用 URL の #admin=… から取る）
