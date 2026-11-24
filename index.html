@@ -380,9 +380,10 @@ const FIELDS = {
   recommend: ["おすすめ"], url: ["URL"], note: ["お知らせ"], lat: ["緯度"], lng: ["経度"],
   course: ["配送コース"], rep: ["担当者"],
   status: ["状態"], closedDate: ["終了日"], lastShip: ["最終出荷日"], source: ["登録元"],
+  noCheck: ["出荷確認"],
 };
 const OUT_COLS = ["code", "name", "type", "area", "address", "tel", "hours", "holiday", "recommend", "url", "note", "lat", "lng",
-  "status", "closedDate", "lastShip", "source"]
+  "status", "closedDate", "lastShip", "source", "noCheck"]
   .concat(CONFIG.internalFields);
 const INTERNAL = { course: { label: "配送コース", icon: "truck" }, rep: { label: "担当者", icon: "person" } };
 const showsInternal = (k) => CONFIG.internalFields.includes(k);
@@ -615,7 +616,7 @@ function fromMaster(o) {
     area: clean(o["得意先分類3名"]) || (a1.match(/^.{2,3}?[都道府県]/) || [""])[0],
     address: a1 + a2 + (a3 ? " " + a3 : ""), geoAddress: geoKey(a1 + a2),
     tel: toHalf(o["TEL"]), course: clean(o["配送コース名"]), rep: clean(o["担当者名"]),
-    status: closed ? CLOSED : "", closedDate: "", lastShip: "", source: "",
+    status: closed ? CLOSED : "", closedDate: "", lastShip: "", source: "", noCheck: "",
     hours: "", holiday: "", recommend: "", url: safeUrl(o["得意先URL"]), note: "", pos: null,
   };
 }
@@ -630,7 +631,7 @@ function fromPublished(o, header) {
     tel: get("tel"), hours: get("hours"), holiday: get("holiday"), recommend: get("recommend"), url: safeUrl(get("url")), note: get("note"),
     course: get("course"), rep: get("rep"),
     status: get("status") === CLOSED ? CLOSED : "", closedDate: toIsoDate(get("closedDate")), lastShip: toIsoDate(get("lastShip")),
-    source: get("source") === MANUAL ? MANUAL : "",
+    source: get("source") === MANUAL ? MANUAL : "", noCheck: get("noCheck") === NO_CHECK ? NO_CHECK : "",
     pos: Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null,
   };
 }
@@ -736,8 +737,10 @@ function lastShipOf(s) {
 // 地図で手動登録した地点（自社拠点など。得意先マスタに無くても残す）
 const MANUAL = "手動";
 const isManual = (s) => s.source === MANUAL;
+// 管理者が「要確認の対象外」にした店（得意先の本部など、出荷が無くても問題ない店）。「出荷確認」列に「不要」と保存する
+const NO_CHECK = "不要";
 function isStale(s) {
-  if (isClosed(s) || isManual(s) || !state.staleCutoff) return false;   // 手動登録の地点は出荷と関係ないので対象外
+  if (isClosed(s) || isManual(s) || s.noCheck === NO_CHECK || !state.staleCutoff) return false;   // 手動登録の地点は出荷と関係ないので対象外
   const last = lastShipOf(s);
   return last ? last <= state.staleCutoff : state.coverageFull;
 }
@@ -1027,6 +1030,7 @@ function openDetail(s, move = true) {
     ${CONFIG.internalFields.length ? `<div class="internal"><div class="cap">社内情報</div><div class="rows">
       ${isManual(s) ? row("tag", "地図で手動登録", "登録元") : row("tag", esc(s.code), "得意先コード")}${CONFIG.internalFields.map((k) => row(INTERNAL[k].icon, esc(s[k]), INTERNAL[k].label)).join("")}
       ${row("clock", fullDate(lastShipOf(s)), "最終出荷日")}
+      ${s.noCheck === NO_CHECK && !isClosed(s) ? row("info", "要確認の対象外（出荷が無くても問題ない店）", "出荷確認") : ""}
     </div></div>` : ""}
     ${productBlock(s)}
     ${isAdmin ? adminBox(s) : ""}`;
@@ -1124,7 +1128,7 @@ async function importFile(file) {
       const p = prev.get(s.code);
       if (!p) continue;
       // 手入力の項目と、地図で登録した「終了」・最終出荷日は、得意先マスタを取り込み直しても残す
-      for (const k of ["hours", "holiday", "recommend", "url", "note", "status", "closedDate", "lastShip"]) if (!s[k] && p[k]) s[k] = p[k];
+      for (const k of ["hours", "holiday", "recommend", "url", "note", "status", "closedDate", "lastShip", "noCheck"]) if (!s[k] && p[k]) s[k] = p[k];
       if (!s.pos && p.pos && p.address === s.address) { s.pos = p.pos; kept++; }
     }
     // 今サーバーにあるデータと比べて、何が増えた・変わった・消えたかをまとめる（結果の表示用）
@@ -1297,7 +1301,11 @@ function adminBox(s) {
     ${isClosed(s)
       ? `<div>終了店舗として登録されています。取引を再開したら元に戻せます。</div>
          <div class="row2"><button type="button" class="btn ghost" id="reopenShop">取引中に戻す</button></div>`
-      : `<div class="row2"><button type="button" class="btn ghost" id="closeShop">終了店舗にする</button></div>
+      : `${s.noCheck === NO_CHECK
+          ? `<div>「${CONFIG.staleMonths}ヶ月以上出荷なし」の要確認から外しています（本部など、出荷が無くても問題ない店）。</div>
+             <div class="row2"><button type="button" class="btn ghost" id="checkOn">要確認の対象に戻す</button></div>`
+          : `<div class="row2"><button type="button" class="btn ghost" id="checkOff">要確認から外す（出荷が無くても問題ない店）</button></div>`}
+         <div class="row2"><button type="button" class="btn ghost" id="closeShop">終了店舗にする</button></div>
          <div id="closeConfirm" hidden>「${esc(s.name)}」を終了店舗にします。地図と一覧から外れます（「終了店舗」の絞り込みで確認・取り消しできます）。
            <div class="row2" style="margin-top:8px"><button type="button" class="btn danger" id="closeYes">終了店舗にする</button><button type="button" class="btn ghost" id="closeNo">やめる</button></div></div>`}
   </div>`;
@@ -1314,6 +1322,16 @@ function wireAdminBox(s) {
   $("closeNo")?.addEventListener("click", () => { $("closeConfirm").hidden = true; $("closeShop").hidden = false; });
   $("closeYes")?.addEventListener("click", () => setStatus(CLOSED));
   $("reopenShop")?.addEventListener("click", () => setStatus(""));
+  const setNoCheck = (v) => {
+    s.noCheck = v;
+    setPending("stores", storesTable(allStores()));
+    markers.get(s)?.setIcon(pinIcon(s, true));
+    refreshAll();
+    savePending();
+    toast(v ? "要確認から外しました" : "要確認の対象に戻しました");
+  };
+  $("checkOff")?.addEventListener("click", () => setNoCheck(NO_CHECK));
+  $("checkOn")?.addEventListener("click", () => setNoCheck(""));
   $("editPlace")?.addEventListener("click", () => openPlaceForm(s));
   $("deletePlace")?.addEventListener("click", () => { $("deleteConfirm").hidden = false; });
   $("deleteNo")?.addEventListener("click", () => { $("deleteConfirm").hidden = true; });
