@@ -49,17 +49,29 @@ svg.i { width: 20px; height: 20px; fill: currentColor; flex: none; }
 #clearq[hidden] { display: none; }
 
 /* ---- 絞り込みチップ ---- */
+/* PC は折り返して全部見せる（右端で切れない）。スマホは横スクロール */
 #chips {
   position: absolute; z-index: 1000; top: 16px; left: calc(var(--panel-w) + 12px); right: 64px;
-  display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 2px;
+  display: flex; flex-wrap: wrap; gap: 8px; padding: 2px; pointer-events: none;
 }
+#chips > * { pointer-events: auto; }
 #chips::-webkit-scrollbar { display: none; }
 .chip {
   flex: none; height: 32px; border-radius: 16px; border: 0; background: #fff; padding: 0 14px;
   box-shadow: 0 1px 3px rgba(60,64,67,.3); display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap;
 }
 .chip:hover { background: var(--hover); }
-.chip[aria-pressed="true"] { background: var(--blue-soft); color: #174ea6; }
+select.chip { max-width: 190px; text-overflow: ellipsis; overflow: hidden; }
+/* 選択中：業態はその色、ほかは青で塗りつぶして ✓ を付ける */
+.chip[aria-pressed="true"] { background: var(--c, var(--blue)); color: #fff; box-shadow: 0 1px 4px rgba(60,64,67,.45); }
+.chip[aria-pressed="true"]:hover { filter: brightness(.95); }
+.chip[aria-pressed="true"] .dot { display: none; }
+button.chip[aria-pressed="true"]::before { content: "✓"; font-weight: 700; }
+select.chip[aria-pressed="true"] { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ffffff'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E"); }
+select.chip option { background: #fff; color: var(--ink); }
+.filterbar { display: flex; align-items: center; gap: 8px; padding: 8px 24px; background: var(--blue-soft); border-bottom: 1px solid var(--line); font-size: 13px; color: #174ea6; }
+.filterbar span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.filterbar button { border: 0; background: none; color: var(--blue); font-weight: 500; white-space: nowrap; padding: 2px 0; }
 .chip .dot { width: 10px; height: 10px; border-radius: 50%; }
 .chip svg.i { width: 16px; height: 16px; }
 .chip.warn { background: #fef7e0; color: #8a5300; }
@@ -164,7 +176,7 @@ button.pname:hover { text-decoration: underline; }
 #admin p { margin: 0; color: var(--sub); font-size: 13px; }
 #drop { border: 2px dashed var(--line); border-radius: 8px; padding: 14px 12px; text-align: center; color: var(--sub); cursor: pointer; }
 #drop small { font-size: 11px; }
-#addPlace { justify-self: stretch; justify-content: center; }
+#addPlace { justify-self: stretch; justify-content: center; white-space: nowrap; }
 .diff { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
 .dtitle2 { font-weight: 500; color: var(--ink); }
 .diff details { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
@@ -183,6 +195,8 @@ button.pname:hover { text-decoration: underline; }
 .pform .req { color: var(--red); font-size: 11px; margin-left: 4px; }
 .pform .hint { margin: 0; font-size: 12px; color: var(--sub); }
 .pform .err { color: var(--red); font-size: 13px; min-height: 1em; }
+.pform input:disabled { background: var(--hover); color: var(--sub); }
+.pnote { margin: 0; padding: 10px 12px; border-radius: 8px; background: #fef7e0; color: #6b4300; font-size: 12px; line-height: 1.6; }
 #dropOverlay { position: fixed; inset: 0; z-index: 3000; background: rgba(26,115,232,.18); border: 4px dashed var(--blue); display: grid; place-items: center; pointer-events: none; }
 #dropOverlay div { background: #fff; border-radius: 12px; padding: 20px 28px; font-size: 18px; font-weight: 500; color: #174ea6; box-shadow: 0 4px 16px rgba(0,0,0,.2); display: grid; gap: 4px; text-align: center; }
 #dropOverlay small { font-size: 12px; font-weight: 400; color: var(--sub); }
@@ -225,7 +239,9 @@ body:not(.collapsed) .leaflet-bottom.leaflet-left { left: var(--panel-w); }
 @media (max-width: 760px) {
   :root { --sheet: 42vh; }
   #searchbox { left: 12px; right: 12px; width: auto; top: max(12px, env(safe-area-inset-top, 0px)); }
-  #chips, body.collapsed #chips { left: 12px; right: 12px; top: calc(max(12px, env(safe-area-inset-top, 0px)) + 56px); }
+  #chips, body.collapsed #chips { left: 12px; right: 12px; top: calc(max(12px, env(safe-area-inset-top, 0px)) + 56px);
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; pointer-events: auto;
+    -webkit-mask-image: linear-gradient(to right, #000 85%, transparent); mask-image: linear-gradient(to right, #000 85%, transparent); padding-right: 32px; }
   #panel { top: auto; left: 0; right: 0; width: auto; height: var(--sheet); padding-top: 0; border-radius: 16px 16px 0 0;
     padding-bottom: env(safe-area-inset-bottom, 0px); padding-left: 0; transition: height .25s ease; }
   body.expanded #panel { height: calc(100% - 64px); }
@@ -280,6 +296,7 @@ body:not(.collapsed) .leaflet-bottom.leaflet-left { left: var(--panel-w); }
       </div>
     </section>
     <div class="listhead"><span id="count">読み込み中…</span><button type="button" id="nearby">現在地から近い順</button></div>
+    <div class="filterbar" id="filterbar" hidden><span id="filtertext"></span><button type="button" id="clearFilters">すべて解除</button></div>
     <div class="prodbar" id="prodbar" hidden>
       <div id="prodname"></div>
       <div class="row2">
@@ -792,6 +809,11 @@ function applyFilter(fit) {
   cluster.clearLayers();
   cluster.addLayers(list.map((s) => markers.get(s)));
   $("count").textContent = `${list.length} 件の${{ active: "店舗", stale: "要確認の店舗", closed: "終了店舗" }[state.view]}`;
+  // 何で絞り込んでいるかを一目で分かるように帯で出す
+  const active = [state.view === "stale" ? "要確認" : state.view === "closed" ? "終了店舗" : "", state.type, state.product && `商品「${state.product}」`,
+    state.area, state.course, state.rep, state.q && `検索「${state.q}」`].filter(Boolean);
+  $("filterbar").hidden = !active.length;
+  $("filtertext").textContent = "絞り込み中：" + active.join("・");
   $("prodbar").hidden = !state.product;
   if (state.product) $("prodname").textContent = `「${state.product}」を使っている店舗 ${list.length} 件`;
   $("copyContacts").disabled = !list.length;
@@ -833,7 +855,7 @@ function renderChips() {
   $("chips").innerHTML =
     (nStale || state.view === "stale" ? viewChip("stale", `${icon("info")}要確認（${CONFIG.staleMonths}ヶ月以上出荷なし）`, nStale, "warn") : "") +
     (nClosed || state.view === "closed" ? viewChip("closed", "終了店舗", nClosed, "gray") : "") +
-    types.map((t) => `<button type="button" class="chip" data-type="${esc(t)}" aria-pressed="${state.type === t}"><span class="dot" style="background:${colorOf(t)}"></span>${esc(t)}</button>`).join("") +
+    types.map((t) => `<button type="button" class="chip" data-type="${esc(t)}" aria-pressed="${state.type === t}" style="--c:${colorOf(t)}"><span class="dot" style="background:${colorOf(t)}"></span>${esc(t)}</button>`).join("") +
     (CONFIG.productMonths && state.products.size
       ? `<select class="chip" id="f-product" aria-label="商品で絞り込み" aria-pressed="${!!state.product}"><option value="">商品</option>${
           productCounts().map(([n, c]) => `<option value="${esc(n)}">${esc(n)}（${c}店）</option>`).join("")}</select>` : "") +
@@ -850,7 +872,8 @@ function renderChips() {
   });
   for (const [id, key] of [["f-product", "product"], ["f-area", "area"], ["f-course", "course"], ["f-rep", "rep"]]) {
     const el = $(id); if (!el) continue;
-    el.value = state[key];
+    el.value = state[key] || "";
+    el.setAttribute("aria-pressed", !!el.value);
     el.onchange = () => { state[key] = el.value; el.setAttribute("aria-pressed", !!el.value); showList(); applyFilter(true); };
   }
 }
@@ -931,6 +954,11 @@ $("handle").onclick = () => {
 };
 $("nearby").onclick = locate;
 $("copyContacts").onclick = copyContacts;
+$("clearFilters").onclick = () => {
+  Object.assign(state, { view: "active", type: null, product: "", area: "", course: "", rep: "", q: "" });
+  $("q").value = ""; $("clearq").hidden = true;
+  renderChips(); showList(); applyFilter(true);
+};
 $("clearProduct").onclick = () => selectProduct("");
 
 function locate() {
@@ -1140,6 +1168,7 @@ function adminBox(s) {
     </div>`;
   }
   return `<div class="adminbox"><div class="cap2">管理者メニュー</div>
+    <div class="row2"><button type="button" class="btn ghost" id="editPlace">登録内容を編集</button></div>
     ${isClosed(s)
       ? `<div>終了店舗として登録されています。取引を再開したら元に戻せます。</div>
          <div class="row2"><button type="button" class="btn ghost" id="reopenShop">取引中に戻す</button></div>`
@@ -1171,7 +1200,8 @@ function wireAdminBox(s) {
   });
 }
 
-/* 管理者：地点を手動で登録・編集（得意先以外の自社拠点なども。必須は名前だけ）
+/* 管理者：地点の登録・編集（必須は名前だけ）。得意先以外の自社拠点なども、得意先コード付きの得意先も登録できる。
+   得意先マスタから取り込んだ店も同じ画面で編集する（店名・住所・電話・業態・配送コースは次の取り込みでマスタの内容に戻る）。
    位置は地図上のピンをドラッグして決める。住所を入れるとピンがその場所へ動く */
 const PLACE_TYPES = ["自社拠点", "その他"];
 let formMarker = null;
@@ -1181,19 +1211,29 @@ const prefOf = (addr) => { const m = addr.match(/^(.{2,3}?)[都道府県]/); ret
 function openPlaceForm(s) {
   removeFormMarker();
   if (state.sel && markers.get(state.sel)) markers.get(state.sel).setIcon(pinIcon(state.sel, false));
-  const types = [...new Set([...PLACE_TYPES, ...state.stores.map((x) => x.type).filter(Boolean)])];
+  const fromMaster = s && !isManual(s);   // 得意先マスタから取り込んだ店
+  const types = [...new Set([...PLACE_TYPES, ...allStores().map((x) => x.type).filter(Boolean)])];
+  const courses = [...new Set(allStores().map((x) => x.course).filter(Boolean))].sort();
   const v = (k) => esc(s?.[k] || "");
+  const manualCode = s && isManual(s) && !/^M[0-9A-Z]+$/.test(s.code) ? s.code : "";   // 自動採番（M…）は空欄で見せる
   $("detailview").innerHTML = `
-    <div class="dhead"><button class="iconbtn" id="pfBack" type="button" aria-label="やめる">${icon("back")}</button><b>${s ? "地点を編集" : "地点を追加"}</b></div>
+    <div class="dhead"><button class="iconbtn" id="pfBack" type="button" aria-label="やめる">${icon("back")}</button><b>${s ? "登録内容を編集" : "地点を追加"}</b></div>
     <form class="pform" id="pform" novalidate>
-      <label><span>名前<span class="req">必須</span></span><input id="pf-name" value="${v("name")}" placeholder="例：本社、第二工場" required></label>
+      ${fromMaster ? `<p class="pnote">得意先マスタから取り込んだ店です。<b>店名・住所・電話番号・種類・配送コース</b>は、次に得意先マスタを取り込むとマスタの内容に戻ります（基幹システム側も直してください）。営業時間・定休日・おすすめ・URL・お知らせ・ピンの位置は残ります。</p>` : ""}
+      <label><span>名前<span class="req">必須</span></span><input id="pf-name" value="${v("name")}" placeholder="例：本社、第二工場、らーめん○○" required></label>
       <label>種類<select id="pf-type">${types.map((t) => `<option${(s ? s.type === t : t === PLACE_TYPES[0]) ? " selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
+      <label>得意先コード${fromMaster ? `<input value="${v("code")}" disabled>`
+        : `<span class="hint">得意先として登録するときに入力（任意）。後で得意先マスタに同じコードが入ると1件にまとまります</span><input id="pf-code" value="${esc(manualCode)}" inputmode="numeric" placeholder="例：00001234">`}</label>
       <label>住所<span class="hint">入れるとピンがその場所へ動きます</span>
         <div class="row2"><input id="pf-address" value="${v("address")}" placeholder="例：京都府京都市南区…"><button type="button" class="btn ghost" id="pf-find">探す</button></div></label>
       <p class="hint" id="pf-poshint">地図のピンをドラッグして位置を決めてください（住所がなくても登録できます）</p>
       <label>電話番号<input id="pf-tel" value="${v("tel")}" inputmode="tel"></label>
+      <label>配送コース<input id="pf-course" value="${v("course")}" list="pf-courses" placeholder="一覧から選ぶか入力"><datalist id="pf-courses">${courses.map((c) => `<option value="${esc(c)}">`).join("")}</datalist></label>
       <label>営業時間<input id="pf-hours" value="${v("hours")}"></label>
+      <label>定休日<input id="pf-holiday" value="${v("holiday")}"></label>
+      <label>おすすめ<input id="pf-recommend" value="${v("recommend")}"></label>
       <label>URL<input id="pf-url" value="${v("url")}" inputmode="url" placeholder="https://"></label>
+      <label>お知らせ<span class="hint">臨時休業など。詳細に目立つ枠で表示されます</span><input id="pf-note" value="${v("note")}"></label>
       <div class="err" id="pf-err"></div>
       <div class="row2"><button type="submit" class="btn">保存</button><button type="button" class="btn ghost" id="pfCancel">やめる</button></div>
     </form>`;
@@ -1226,12 +1266,21 @@ function openPlaceForm(s) {
     e.preventDefault();
     const name = clean($("pf-name").value);
     if (!name) { $("pf-err").textContent = "名前を入れてください"; $("pf-name").focus(); return; }
+    // 得意先コード（手動登録のみ入力可）：他の店と重なっていたら保存しない
+    let code = fromMaster ? s.code : toHalf($("pf-code").value);
+    if (code) {
+      const dup = allStores().find((x) => x !== s && x.code === code);
+      if (dup) { $("pf-err").textContent = `この得意先コードは「${dup.name}」で使われています`; $("pf-code").focus(); return; }
+    } else code = s?.code && /^M[0-9A-Z]+$/.test(s.code) ? s.code : "M" + Date.now().toString(36).toUpperCase();
     const ll = formMarker.getLatLng();
     const address = clean($("pf-address").value);
-    const rec = s || { code: "M" + Date.now().toString(36).toUpperCase(), status: "", closedDate: "", lastShip: "",
-      course: "", rep: "", holiday: "", recommend: "", note: "", source: MANUAL };
-    Object.assign(rec, { name, type: $("pf-type").value, address, geoAddress: geoKey(address), area: prefOf(address),
-      tel: toHalf($("pf-tel").value), hours: clean($("pf-hours").value), url: safeUrl(clean($("pf-url").value)),
+    const rec = s || { status: "", closedDate: "", lastShip: "", rep: "", source: MANUAL };
+    const addressChanged = !s || (s.address || "") !== address;
+    Object.assign(rec, { code, name, type: $("pf-type").value, address, geoAddress: geoKey(address),
+      area: addressChanged ? (prefOf(address) || rec.area || "") : rec.area,
+      tel: toHalf($("pf-tel").value), course: clean($("pf-course").value),
+      hours: clean($("pf-hours").value), holiday: clean($("pf-holiday").value), recommend: clean($("pf-recommend").value),
+      url: safeUrl(clean($("pf-url").value)), note: clean($("pf-note").value),
       pos: [+ll.lat.toFixed(6), +ll.lng.toFixed(6)] });
     removeFormMarker();
     setStores(s ? allStores() : allStores().concat(rec));
