@@ -165,6 +165,14 @@ button.pname:hover { text-decoration: underline; }
 #drop { border: 2px dashed var(--line); border-radius: 8px; padding: 14px 12px; text-align: center; color: var(--sub); cursor: pointer; }
 #drop small { font-size: 11px; }
 #addPlace { justify-self: stretch; justify-content: center; }
+.diff { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
+.dtitle2 { font-weight: 500; color: var(--ink); }
+.diff details { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+.diff summary { cursor: pointer; }
+.diff ul { margin: 6px 0 4px; padding-left: 18px; max-height: 220px; overflow-y: auto; }
+.diff li { margin: 2px 0; overflow-wrap: anywhere; }
+.diff p { margin: 0; color: var(--sub); }
+.dmeta { color: var(--sub); font-size: 12px; margin-left: 6px; }
 .dhead b { font-weight: 500; font-size: 16px; }
 .pform { display: grid; gap: 14px; padding: 8px 24px 24px; }
 .pform label { display: grid; gap: 4px; font-size: 13px; color: var(--sub); }
@@ -261,7 +269,7 @@ body:not(.collapsed) .leaflet-bottom.leaflet-left { left: var(--panel-w); }
       <div class="adminbody" id="adminBody">
         <p><b>店舗の更新</b>：得意先マスタ（Excel または CSV）をドロップ。終了・本部・催事は自動で除外し、住所から位置を割り出します。<br>
           <b>使用商品の更新（週1回）</b>：売上明細をドロップ。今までの分に追記し、直近3ヶ月より古い分は自動で消えます。</p>
-        <button type="button" class="btn ghost" id="addPlace">＋ 地点を追加（自社拠点など、得意先以外も）</button>
+        <button type="button" class="btn ghost" id="addPlace" title="自社拠点など、得意先以外の場所も登録できます">＋ 地点を追加</button>
         <div id="drop" tabindex="0" role="button">ここにファイルをドロップ<br>またはクリックして選択<br><small>（地図の上など、画面のどこに落としても取り込めます）</small></div>
         <input id="file" type="file" accept=".csv,.xlsx,.xls,text/csv" hidden>
         <progress id="prog" value="0" max="1" hidden></progress>
@@ -982,6 +990,8 @@ async function importFile(file) {
       for (const k of ["hours", "holiday", "recommend", "url", "note", "status", "closedDate", "lastShip"]) if (!s[k] && p[k]) s[k] = p[k];
       if (!s.pos && p.pos && p.address === s.address) { s.pos = p.pos; kept++; }
     }
+    // 今サーバーにあるデータと比べて、何が増えた・変わった・消えたかをまとめる（結果の表示用）
+    const diff = diffStores(state.published.filter((p) => !isManual(p)), stores);
     // 地図で手動登録した地点（自社拠点など）は、得意先マスタに無くても残す
     const codes = new Set(stores.map((s) => s.code));
     const manual = state.published.filter((p) => isManual(p) && !codes.has(p.code));
@@ -1002,11 +1012,53 @@ async function importFile(file) {
     msg.innerHTML = `「${esc(file.name)}」から 取引中 <b>${imported - nClosed} 店舗</b>・終了 <b>${nClosed} 店舗</b>を取り込みました（この画面だけの確認表示です）。` +
       (manual.length ? `<br>地図で手動登録した地点 ${manual.length} 件はそのまま残しました。` : "") +
       (skipped ? `<br>本部・催事など地図に載せない ${skipped} 件は除外しました。` : "") +
-      (failed.length ? `<br><span class="err">位置が分からなかった店舗：${failed.map((s) => esc(s.name)).join("、")}。保存したデータの緯度・経度を直接入力してください。</span>` : "");
+      (failed.length ? `<br><span class="err">位置が分からなかった店舗：${failed.map((s) => esc(s.name)).join("、")}。保存したデータの緯度・経度を直接入力してください。</span>` : "") +
+      diffHtml(diff);
   } catch (e) {
     prog.hidden = true;
     msg.innerHTML = `<span class="err">読み込めませんでした。${esc(e.message)}</span>`;
   }
+}
+
+/* 得意先マスタの取り込み結果：今サーバーにあるデータ（before）と、取り込んだデータ（after）の違い。
+   取り込み済みの店も毎回マスタの最新内容で読み直すので、ここで「何が変わったか」を見せる */
+const DIFF_FIELDS = [["name", "店名"], ["tel", "電話"], ["type", "業態"], ["area", "エリア"], ["course", "配送コース"]];
+function diffStores(before, after) {
+  const prev = new Map(before.map((p) => [p.code, p]));
+  const d = { added: [], closedNow: [], reopened: [], moved: [], changed: [], removed: [], same: 0 };
+  for (const s of after) {
+    const p = prev.get(s.code);
+    if (!p) { d.added.push(s); continue; }
+    let touched = false;
+    if (isClosed(s) && !isClosed(p)) { d.closedNow.push(s); touched = true; }
+    if (!isClosed(s) && isClosed(p)) { d.reopened.push(s); touched = true; }
+    if ((p.address || "") !== (s.address || "")) { d.moved.push({ s, from: p.address }); touched = true; }
+    const what = DIFF_FIELDS.filter(([k]) => (p[k] || "") !== (s[k] || "")).map(([, label]) => label);
+    if (what.length) { d.changed.push({ s, what }); touched = true; }
+    if (!touched) d.same++;
+  }
+  const codes = new Set(after.map((s) => s.code));
+  d.removed = before.filter((p) => !codes.has(p.code));
+  return d;
+}
+function diffHtml(d) {
+  const LIMIT = 300;
+  const item = (s, extra = "") => `<li>${esc(s.name)}<span class="dmeta">${esc([s.area, s.type].filter(Boolean).join("・"))}${extra}</span></li>`;
+  const block = (title, list, render, open = false) => list.length
+    ? `<details${open ? " open" : ""}><summary>${title} <b>${list.length}</b> 件</summary><ul>${list.slice(0, LIMIT).map(render).join("")}${list.length > LIMIT ? `<li class="dmeta">ほか ${list.length - LIMIT} 件</li>` : ""}</ul></details>` : "";
+  const addedOpen = d.added.filter((s) => !isClosed(s)), addedClosed = d.added.filter(isClosed);
+  const nothing = !d.added.length && !d.closedNow.length && !d.reopened.length && !d.moved.length && !d.changed.length && !d.removed.length;
+  return `<div class="diff"><div class="dtitle2">今のデータとの違い（保存すると反映）</div>` +
+    (nothing ? `<p>新しく増えた店舗・変わった店舗はありません（変更なし ${d.same} 件）。</p>` :
+      block("新規に追加（取引中）", addedOpen, (s) => item(s), addedOpen.length <= 30) +
+      block("新規に追加（終了店舗として）", addedClosed, (s) => item(s)) +
+      block("新たに終了になった", d.closedNow, (s) => item(s), d.closedNow.length <= 30) +
+      block("取引を再開した", d.reopened, (s) => item(s), true) +
+      block("住所が変わった（位置を調べ直し）", d.moved, (x) => item(x.s, `／前：${esc(x.from || "なし")}`)) +
+      block("店名・電話などが変わった", d.changed, (x) => item(x.s, `／${esc(x.what.join("・"))}`)) +
+      block("得意先マスタに無くなった（保存すると地図から消えます）", d.removed, (s) => item(s), true) +
+      `<p>変更のない店舗 ${d.same} 件</p>`) +
+    `</div>`;
 }
 
 /* 売上明細（または products.csv）の取り込み：公開中の products.csv に追記する */
