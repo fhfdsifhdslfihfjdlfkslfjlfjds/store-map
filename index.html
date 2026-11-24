@@ -168,6 +168,9 @@ button.pname:hover { text-decoration: underline; }
 .prods li .pmeta { margin-left: auto; }
 .pdel { border: 1px solid var(--line); background: #fff; color: var(--sub); border-radius: 12px; font-size: 11px; padding: 1px 8px; flex: none; }
 .pdel:hover { color: var(--red); border-color: var(--red); }
+.pconfirm { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--red); flex: none; white-space: nowrap; }
+.pconfirm button { border-radius: 12px; font-size: 11px; padding: 1px 8px; border: 1px solid var(--line); background: #fff; }
+.pconfirm .pyes { background: var(--red); border-color: var(--red); color: #fff; }
 .padd { display: flex; gap: 8px; padding: 4px 24px 6px; }
 .padd input { flex: 1; min-width: 0; height: 36px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; font-size: 14px; }
 .padd .btn { white-space: nowrap; }
@@ -629,17 +632,18 @@ const shortDate = (iso) => iso ? `${+iso.slice(5, 7)}/${+iso.slice(8, 10)}` : ""
 
 /* 売上明細 → 出荷日ごとの数量（返品の赤伝も合算）。期間は見出しの「日付 : ～」から取る */
 function fromSales(objs, preamble) {
-  const sum = new Map();
+  const sum = new Map(), shopNames = new Map();
   for (const o of objs) {
     const code = o["得意先"], name = clean(o["商品名1"] || o["商品名"]), date = toIsoDate(o["出荷日"] || o["売上日"]);
     if (!/^\d+$/.test(code) || !name || !date) continue;          // 合計行などは除く
+    if (!shopNames.has(code)) shopNames.set(code, clean(o["得意先略称"]).replace(/※.*$/, "").trim());   // 地図にない得意先の表示用
     const key = `${code}\t${name}\t${date}`;
     sum.set(key, (sum.get(key) || 0) + (parseFloat(toHalf(o["売上数"])) || 0));
   }
   const rows = [...sum].map(([k, qty]) => { const [code, name, date] = k.split("\t"); return { code, name, date, qty }; });
   const range = (preamble.match(/日付[^\n]*/) || [""])[0].match(/\d{4}\D+\d{1,2}\D+\d{1,2}/g)?.map(toIsoDate);
   const dates = rows.map((r) => r.date).sort();
-  return { rows, from: range?.[0] || dates[0], to: range?.[1] || dates.at(-1) };
+  return { rows, from: range?.[0] || dates[0], to: range?.[1] || dates.at(-1), shopNames };
 }
 // 管理者が地図で編集した使用商品：「手動」＝手で追加（3ヶ月で消えない）、「非表示」＝その日までの出荷分を一覧から外す
 const P_MANUAL = "手動", P_HIDDEN = "非表示";
@@ -761,11 +765,21 @@ function wireProductEdit(s) {
     setPending("products", productsTable(state.sales));
     savePending();
   };
+  // 「外す」はワンクッション：押すとその行に確認を出し、「外す」をもう一度押したときだけ外す
   $("detailview").querySelectorAll("[data-del]").forEach((b) => b.onclick = () => {
-    const name = b.dataset.del, p = productOf(s, name);
-    if (p?.manual) state.sales = state.sales.filter((r) => !(r.code === s.code && r.name === name && r.source === P_MANUAL));
-    else state.sales.push({ code: s.code, name, date: p?.last || todayIso(), qty: 0, source: P_HIDDEN });
-    save();
+    const name = b.dataset.del;
+    const box = document.createElement("span");
+    box.className = "pconfirm";
+    box.innerHTML = `この店から外しますか？<button type="button" class="pyes">外す</button><button type="button" class="pno">やめる</button>`;
+    b.replaceWith(box);
+    box.querySelector(".pno").onclick = () => box.replaceWith(b);
+    box.querySelector(".pyes").onclick = () => {
+      const p = productOf(s, name);
+      if (p?.manual) state.sales = state.sales.filter((r) => !(r.code === s.code && r.name === name && r.source === P_MANUAL));
+      else state.sales.push({ code: s.code, name, date: p?.last || todayIso(), qty: 0, source: P_HIDDEN });
+      save();
+      toast(`「${name}」を外しました`);
+    };
   });
   const add = () => {
     const name = clean($("padd-name").value);
@@ -1166,13 +1180,22 @@ function importSales(file, header, objs, preamble) {
   setPending("products", productsTable(merged));
   if (updateLastShip()) setPending("stores", storesTable(allStores()));   // 最終出荷日も一緒に保存する
   refreshAll();
-  const onMap = new Set(state.stores.map((s) => s.code));
-  const shops = new Set(add.rows.map((r) => r.code));
-  const outside = [...shops].filter((c) => !onMap.has(c)).length;
+  // 地図に出ない得意先：未登録（得意先マスタ未取り込み・本部・催事など）と、終了店舗。出荷データ自体は保存しておき、
+  // 後で得意先マスタの取り込みや「地点を追加」（得意先コード入り）で登録されれば、その店の使用商品として自動で出る
+  const byCode = new Map(allStores().map((s) => [s.code, s]));
+  const shops = [...new Set(add.rows.map((r) => r.code))];
+  const label = (c) => `${esc(add.shopNames?.get(c) || "（名前不明）")}<span class="dmeta">得意先 ${esc(c)}</span>`;
+  const unregistered = shops.filter((c) => !byCode.has(c));
+  const closedShops = shops.filter((c) => byCode.has(c) && isClosed(byCode.get(c)));
+  const block = (title, list, note) => list.length
+    ? `<details><summary>${title} <b>${list.length}</b> 件</summary><p>${note}</p><ul>${list.map((c) => `<li>${label(c)}</li>`).join("")}</ul></details>` : "";
   const { from, to } = state.productRange;
-  msg.innerHTML = `「${esc(file.name)}」の ${shortDate(add.from)}〜${shortDate(add.to)} 出荷分（${shops.size} 店舗）を取り込みました。` +
+  msg.innerHTML = `「${esc(file.name)}」の ${shortDate(add.from)}〜${shortDate(add.to)} 出荷分（${shops.length} 店舗）を取り込みました。` +
     `<br>地図には ${shortDate(from)}〜${shortDate(to)} に出荷した商品を表示しています（この画面だけの確認表示です）。` +
-    (outside ? `<br>地図にない得意先（終了・本部など）の ${outside} 件は表示されません。` : "");
+    (unregistered.length || closedShops.length ? `<div class="diff"><div class="dtitle2">地図に出ない得意先（出荷データは保存されます）</div>` +
+      block("地図に未登録", unregistered, "得意先マスタを取り込むか、「＋ 地点を追加」で得意先コードを入れて登録すると、この出荷分が使用商品として表示されます（本部・催事などは対象外）。") +
+      block("終了店舗", closedShops, "終了店舗として登録されている店です。取引が続いているなら、詳細の管理者メニューから「取引中に戻す」にしてください。") +
+      `</div>` : "");
 }
 
 /* 取り込んだ内容は、確認してから「保存」で反映する */
