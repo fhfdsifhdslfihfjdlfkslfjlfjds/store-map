@@ -380,10 +380,10 @@ const FIELDS = {
   recommend: ["おすすめ"], url: ["URL"], note: ["お知らせ"], lat: ["緯度"], lng: ["経度"],
   course: ["配送コース"], rep: ["担当者"],
   status: ["状態"], closedDate: ["終了日"], lastShip: ["最終出荷日"], source: ["登録元"],
-  noCheck: ["出荷確認"],
+  noCheck: ["出荷確認"], deleted: ["削除"],
 };
 const OUT_COLS = ["code", "name", "type", "area", "address", "tel", "hours", "holiday", "recommend", "url", "note", "lat", "lng",
-  "status", "closedDate", "lastShip", "source", "noCheck"]
+  "status", "closedDate", "lastShip", "source", "noCheck", "deleted"]
   .concat(CONFIG.internalFields);
 const INTERNAL = { course: { label: "配送コース", icon: "truck" }, rep: { label: "担当者", icon: "person" } };
 const showsInternal = (k) => CONFIG.internalFields.includes(k);
@@ -617,7 +617,7 @@ function fromMaster(o) {
     area: clean(o["得意先分類3名"]) || (a1.match(/^.{2,3}?[都道府県]/) || [""])[0],
     address: a1 + a2 + (a3 ? " " + a3 : ""), geoAddress: geoKey(a1 + a2),
     tel: toHalf(o["TEL"]), course: clean(o["配送コース名"]), rep: clean(o["担当者名"]),
-    status: closed ? CLOSED : "", closedDate: "", lastShip: "", source: "", noCheck: "",
+    status: closed ? CLOSED : "", closedDate: "", lastShip: "", source: "", noCheck: "", deleted: "",
     hours: "", holiday: "", recommend: "", url: safeUrl(o["得意先URL"]), note: "", pos: null,
   };
 }
@@ -633,6 +633,7 @@ function fromPublished(o, header) {
     course: get("course"), rep: get("rep"),
     status: get("status") === CLOSED ? CLOSED : "", closedDate: toIsoDate(get("closedDate")), lastShip: toIsoDate(get("lastShip")),
     source: get("source") === MANUAL ? MANUAL : "", noCheck: get("noCheck") === NO_CHECK ? NO_CHECK : "",
+    deleted: get("deleted") === DELETED ? DELETED : "",
     pos: Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null,
   };
 }
@@ -740,8 +741,13 @@ const MANUAL = "手動";
 const isManual = (s) => s.source === MANUAL;
 // 管理者が「要確認の対象外」にした店（得意先の本部など、出荷が無くても問題ない店）。「出荷確認」列に「不要」と保存する
 const NO_CHECK = "不要";
+// 管理者が削除した得意先マスタの店。データには「削除」列に「削除」として残し、得意先マスタを取り込み直しても出てこないようにする。
+// 地図・一覧には出さず、管理者だけ「削除した店舗」の絞り込みで見て元に戻せる
+const DELETED = "削除";
+const isDeleted = (s) => s.deleted === DELETED;
+const liveStores = () => state.stores.filter((s) => !isDeleted(s));
 function isStale(s) {
-  if (isClosed(s) || isManual(s) || s.noCheck === NO_CHECK || !state.staleCutoff) return false;   // 手動登録の地点は出荷と関係ないので対象外
+  if (isClosed(s) || isDeleted(s) || isManual(s) || s.noCheck === NO_CHECK || !state.staleCutoff) return false;   // 手動登録の地点は出荷と関係ないので対象外
   const last = lastShipOf(s);
   return last ? last <= state.staleCutoff : state.coverageFull;
 }
@@ -873,7 +879,8 @@ function setStores(stores) {
 
 function filtered() {
   const q = state.q.toLowerCase();
-  const inView = (s) => state.view === "closed" ? isClosed(s) : !isClosed(s) && (state.view !== "stale" || isStale(s));
+  const inView = (s) => state.view === "deleted" ? isDeleted(s) : isDeleted(s) ? false
+    : state.view === "closed" ? isClosed(s) : !isClosed(s) && (state.view !== "stale" || isStale(s));
   let list = state.stores.filter((s) => inView(s) &&
     (!state.type || s.type === state.type) && (!state.area || s.area === state.area) &&
     (!state.course || s.course === state.course) && (!state.rep || s.rep === state.rep) &&
@@ -893,7 +900,7 @@ const productOf = (s, name) => (state.products.get(s.code) || []).find((p) => p.
 // 商品ごとの使用店舗数（終了店舗は数えない）。多い順
 function productCounts() {
   const count = new Map();
-  for (const s of state.stores) {
+  for (const s of liveStores()) {
     if (isClosed(s)) continue;
     for (const p of state.products.get(s.code) || []) count.set(p.name, (count.get(p.name) || 0) + 1);
   }
@@ -920,9 +927,9 @@ function applyFilter(fit) {
   const list = filtered();
   cluster.clearLayers();
   cluster.addLayers(list.map((s) => markers.get(s)));
-  $("count").textContent = `${list.length} 件の${{ active: "店舗", stale: "要確認の店舗", closed: "終了店舗" }[state.view]}`;
+  $("count").textContent = `${list.length} 件の${{ active: "店舗", stale: "要確認の店舗", closed: "終了店舗", deleted: "削除した店舗" }[state.view]}`;
   // 何で絞り込んでいるかを一目で分かるように帯で出す
-  const active = [state.view === "stale" ? "要確認" : state.view === "closed" ? "終了店舗" : "", state.type, state.product && `商品「${state.product}」`,
+  const active = [{ stale: "要確認", closed: "終了店舗", deleted: "削除した店舗" }[state.view] || "", state.type, state.product && `商品「${state.product}」`,
     state.area, state.course, state.rep, state.q && `検索「${state.q}」`].filter(Boolean);
   $("filterbar").hidden = !active.length;
   $("filtertext").textContent = "絞り込み中：" + active.join("・");
@@ -957,16 +964,20 @@ const fitPadding = () => innerWidth <= 760
   : { paddingTopLeft: [document.body.classList.contains("collapsed") ? 60 : 450, 80], paddingBottomRight: [70, 40] };
 
 function renderChips() {
-  const types = [...new Set(state.stores.map((s) => s.type).filter(Boolean))];
-  const areaCount = {}; state.stores.forEach((s) => s.area && (areaCount[s.area] = (areaCount[s.area] || 0) + 1));
+  const live = liveStores();
+  const types = [...new Set(live.map((s) => s.type).filter(Boolean))];
+  const areaCount = {}; live.forEach((s) => s.area && (areaCount[s.area] = (areaCount[s.area] || 0) + 1));
   const areas = Object.keys(areaCount).sort((a, b) => areaCount[b] - areaCount[a]);
   const sel = (id, label, values) => `<select class="chip" id="${id}" aria-label="${label}"><option value="">${label}</option>${values.map((v) => `<option>${esc(v)}</option>`).join("")}</select>`;
-  const uniq = (k) => [...new Set(state.stores.map((s) => s[k]).filter(Boolean))].sort();
-  const nStale = state.stores.filter(isStale).length, nClosed = state.stores.filter(isClosed).length;
+  const uniq = (k) => [...new Set(live.map((s) => s[k]).filter(Boolean))].sort();
+  const nStale = live.filter(isStale).length, nClosed = live.filter(isClosed).length;
+  const nDeleted = isAdmin ? state.stores.filter(isDeleted).length : 0;   // 削除した店舗はメンバーには見せない
+  if (state.view === "deleted" && !isAdmin) state.view = "active";
   const viewChip = (v, label, n, cls) => `<button type="button" class="chip ${cls}" data-view="${v}" aria-pressed="${state.view === v}">${label} ${n}</button>`;
   $("chips").innerHTML =
     (nStale || state.view === "stale" ? viewChip("stale", `${icon("info")}要確認（${CONFIG.staleMonths}ヶ月以上出荷なし）`, nStale, "warn") : "") +
     (nClosed || state.view === "closed" ? viewChip("closed", "終了店舗", nClosed, "gray") : "") +
+    (nDeleted || (isAdmin && state.view === "deleted") ? viewChip("deleted", "削除した店舗", nDeleted, "gray") : "") +
     types.map((t) => `<button type="button" class="chip" data-type="${esc(t)}" aria-pressed="${state.type === t}" style="--c:${colorOf(t)}"><span class="dot" style="background:${colorOf(t)}"></span>${esc(t)}</button>`).join("") +
     (CONFIG.productMonths && state.products.size
       ? `<select class="chip" id="f-product" aria-label="商品で絞り込み" aria-pressed="${!!state.product}"><option value="">商品</option>${
@@ -1018,6 +1029,7 @@ function openDetail(s, move = true) {
       <button class="act" type="button" id="copyaddr"><span class="circ">${icon("copy")}</span>住所をコピー</button>
       ${s.url ? `<a class="act" href="${esc(s.url)}" target="_blank" rel="noopener"><span class="circ">${icon("link")}</span>ウェブサイト</a>` : ""}
     </div>
+    ${isDeleted(s) ? `<div class="alert gray">${icon("info")}<div>削除した店舗（管理者だけに表示）</div></div>` : ""}
     ${isClosed(s) ? `<div class="alert gray">${icon("info")}<div>${esc(closedText(s))}</div></div>` : ""}
     ${isStale(s) ? `<div class="alert warn">${icon("info")}<div><b>${esc(staleText(s))}</b><br>取引が止まっていないか確認してください。閉店していたら管理者が「終了店舗」に登録します。</div></div>` : ""}
     ${s.note ? `<div class="alert">${icon("info")}<div>${esc(s.note)}</div></div>` : ""}
@@ -1105,6 +1117,7 @@ async function syncAdmin() {
     catch (e) { toast(e.message); }
   }
   $("admin").hidden = !isAdmin;
+  renderChips(); applyFilter(false);
   if (state.sel && !$("detailview").hidden) openDetail(state.sel, false);
 }
 addEventListener("hashchange", syncAdmin);
@@ -1129,7 +1142,7 @@ async function importFile(file) {
       const p = prev.get(s.code);
       if (!p) continue;
       // 手入力の項目と、地図で登録した「終了」・最終出荷日は、得意先マスタを取り込み直しても残す
-      for (const k of ["hours", "holiday", "recommend", "url", "note", "status", "closedDate", "lastShip", "noCheck"]) if (!s[k] && p[k]) s[k] = p[k];
+      for (const k of ["hours", "holiday", "recommend", "url", "note", "status", "closedDate", "lastShip", "noCheck", "deleted"]) if (!s[k] && p[k]) s[k] = p[k];
       if (!s.pos && p.pos && p.address === s.address) { s.pos = p.pos; kept++; }
     }
     // 今サーバーにあるデータと比べて、何が増えた・変わった・消えたかをまとめる（結果の表示用）
@@ -1148,10 +1161,12 @@ async function importFile(file) {
     const failed = stores.filter((s) => !s.pos && !isClosed(s));
     setPending("stores", storesTable(stores));
     setStores(stores); showList();
-    const nClosed = stores.filter(isClosed).length;
+    const nDeleted = stores.filter((s) => isDeleted(s) && !isManual(s)).length;
+    const nClosed = stores.filter((s) => isClosed(s) && !isDeleted(s)).length;
     const imported = stores.length - manual.length;
     const skipped = isMaster ? objs.filter((o) => o["得意先名1"]).length - imported : 0;
-    msg.innerHTML = `「${esc(file.name)}」から 取引中 <b>${imported - nClosed} 店舗</b>・終了 <b>${nClosed} 店舗</b>を取り込みました（この画面だけの確認表示です）。` +
+    msg.innerHTML = `「${esc(file.name)}」から 取引中 <b>${imported - nClosed - nDeleted} 店舗</b>・終了 <b>${nClosed} 店舗</b>を取り込みました（この画面だけの確認表示です）。` +
+      (nDeleted ? `<br>地図で削除した店舗 ${nDeleted} 件は、削除したままにしました。` : "") +
       (manual.length ? `<br>地図で手動登録した地点 ${manual.length} 件はそのまま残しました。` : "") +
       (skipped ? `<br>本部・催事など地図に載せない ${skipped} 件は除外しました。` : "") +
       (failed.length ? `<br><span class="err">位置が分からなかった店舗：${failed.map((s) => esc(s.name)).join("、")}。保存したデータの緯度・経度を直接入力してください。</span>` : "") +
@@ -1297,8 +1312,15 @@ function adminBox(s) {
         <div class="row2" style="margin-top:8px"><button type="button" class="btn danger" id="deleteYes">削除する</button><button type="button" class="btn ghost" id="deleteNo">やめる</button></div></div>
     </div>`;
   }
+  if (isDeleted(s)) {
+    return `<div class="adminbox"><div class="cap2">管理者メニュー</div>
+      <div>削除した店舗です。地図・一覧には出ず、得意先マスタを取り込み直しても出てきません。</div>
+      <div class="row2"><button type="button" class="btn ghost" id="restoreShop">元に戻す</button></div></div>`;
+  }
   return `<div class="adminbox"><div class="cap2">管理者メニュー</div>
-    <div class="row2"><button type="button" class="btn ghost" id="editPlace">登録内容を編集</button></div>
+    <div class="row2"><button type="button" class="btn ghost" id="editPlace">登録内容を編集</button><button type="button" class="btn ghost" id="deleteShop">削除</button></div>
+    <div id="deleteShopConfirm" hidden>「${esc(s.name)}」を地図から削除します。得意先マスタを取り込み直しても出てきません（「削除した店舗」から元に戻せます）。
+      <div class="row2" style="margin-top:8px"><button type="button" class="btn danger" id="deleteShopYes">削除する</button><button type="button" class="btn ghost" id="deleteShopNo">やめる</button></div></div>
     ${isClosed(s)
       ? `<div>終了店舗として登録されています。取引を再開したら元に戻せます。</div>
          <div class="row2"><button type="button" class="btn ghost" id="reopenShop">取引中に戻す</button></div>`
@@ -1332,6 +1354,18 @@ function wireAdminBox(s) {
     toast(v ? "要確認から外しました" : "要確認の対象に戻しました");
   };
   $("checkOff")?.addEventListener("click", () => setNoCheck(NO_CHECK));
+  const setDeleted = (v) => {
+    s.deleted = v;
+    setPending("stores", storesTable(allStores()));
+    refreshAll();
+    savePending();
+    if (v) { showList(); toast(`「${s.name}」を削除しました`); }
+    else toast(`「${s.name}」を元に戻しました`);
+  };
+  $("deleteShop")?.addEventListener("click", () => { $("deleteShopConfirm").hidden = false; $("deleteShop").hidden = true; });
+  $("deleteShopNo")?.addEventListener("click", () => { $("deleteShopConfirm").hidden = true; $("deleteShop").hidden = false; });
+  $("deleteShopYes")?.addEventListener("click", () => setDeleted(DELETED));
+  $("restoreShop")?.addEventListener("click", () => setDeleted(""));
   $("checkOn")?.addEventListener("click", () => setNoCheck(""));
   $("editPlace")?.addEventListener("click", () => openPlaceForm(s));
   $("deletePlace")?.addEventListener("click", () => { $("deleteConfirm").hidden = false; });
