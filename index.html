@@ -164,6 +164,17 @@ button.pname:hover { text-decoration: underline; }
 #admin p { margin: 0; color: var(--sub); font-size: 13px; }
 #drop { border: 2px dashed var(--line); border-radius: 8px; padding: 14px 12px; text-align: center; color: var(--sub); cursor: pointer; }
 #drop small { font-size: 11px; }
+#addPlace { justify-self: stretch; justify-content: center; }
+.dhead b { font-weight: 500; font-size: 16px; }
+.pform { display: grid; gap: 14px; padding: 8px 24px 24px; }
+.pform label { display: grid; gap: 4px; font-size: 13px; color: var(--sub); }
+.pform input, .pform select { height: 40px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; font-size: 14px; color: var(--ink); background: #fff; min-width: 0; }
+.pform input:focus, .pform select:focus { outline: 2px solid var(--blue); border-color: transparent; }
+.pform .row2 { display: flex; gap: 8px; }
+.pform .row2 input { flex: 1; }
+.pform .req { color: var(--red); font-size: 11px; margin-left: 4px; }
+.pform .hint { margin: 0; font-size: 12px; color: var(--sub); }
+.pform .err { color: var(--red); font-size: 13px; min-height: 1em; }
 #dropOverlay { position: fixed; inset: 0; z-index: 3000; background: rgba(26,115,232,.18); border: 4px dashed var(--blue); display: grid; place-items: center; pointer-events: none; }
 #dropOverlay div { background: #fff; border-radius: 12px; padding: 20px 28px; font-size: 18px; font-weight: 500; color: #174ea6; box-shadow: 0 4px 16px rgba(0,0,0,.2); display: grid; gap: 4px; text-align: center; }
 #dropOverlay small { font-size: 12px; font-weight: 400; color: var(--sub); }
@@ -250,6 +261,7 @@ body:not(.collapsed) .leaflet-bottom.leaflet-left { left: var(--panel-w); }
       <div class="adminbody" id="adminBody">
         <p><b>店舗の更新</b>：得意先マスタ（Excel または CSV）をドロップ。終了・本部・催事は自動で除外し、住所から位置を割り出します。<br>
           <b>使用商品の更新（週1回）</b>：売上明細をドロップ。今までの分に追記し、直近3ヶ月より古い分は自動で消えます。</p>
+        <button type="button" class="btn ghost" id="addPlace">＋ 地点を追加（自社拠点など、得意先以外も）</button>
         <div id="drop" tabindex="0" role="button">ここにファイルをドロップ<br>またはクリックして選択<br><small>（地図の上など、画面のどこに落としても取り込めます）</small></div>
         <input id="file" type="file" accept=".csv,.xlsx,.xls,text/csv" hidden>
         <progress id="prog" value="0" max="1" hidden></progress>
@@ -306,6 +318,9 @@ const CONFIG = {
     "ラーメン店(自社のみ)": "#ea4335",
     "ラーメン店(他社併用)": "#f57c00",
     "食堂/居酒屋": "#1e8e3e",
+    // 地図で手動登録する得意先以外の地点
+    "自社拠点": "#3949ab",
+    "その他": "#795548",
   },
   defaultColor: "#7b1fa2",
 };
@@ -319,10 +334,10 @@ const FIELDS = {
   address: ["住所"], tel: ["電話番号", "TEL"], hours: ["営業時間"], holiday: ["定休日"],
   recommend: ["おすすめ"], url: ["URL"], note: ["お知らせ"], lat: ["緯度"], lng: ["経度"],
   course: ["配送コース"], rep: ["担当者"],
-  status: ["状態"], closedDate: ["終了日"], lastShip: ["最終出荷日"],
+  status: ["状態"], closedDate: ["終了日"], lastShip: ["最終出荷日"], source: ["登録元"],
 };
 const OUT_COLS = ["code", "name", "type", "area", "address", "tel", "hours", "holiday", "recommend", "url", "note", "lat", "lng",
-  "status", "closedDate", "lastShip"]
+  "status", "closedDate", "lastShip", "source"]
   .concat(CONFIG.internalFields);
 const INTERNAL = { course: { label: "配送コース", icon: "truck" }, rep: { label: "担当者", icon: "person" } };
 const showsInternal = (k) => CONFIG.internalFields.includes(k);
@@ -536,7 +551,7 @@ function fromMaster(o) {
     area: clean(o["得意先分類3名"]) || (a1.match(/^.{2,3}?[都道府県]/) || [""])[0],
     address: a1 + a2 + (a3 ? " " + a3 : ""), geoAddress: geoKey(a1 + a2),
     tel: toHalf(o["TEL"]), course: clean(o["配送コース名"]), rep: clean(o["担当者名"]),
-    status: closed ? CLOSED : "", closedDate: "", lastShip: "",
+    status: closed ? CLOSED : "", closedDate: "", lastShip: "", source: "",
     hours: "", holiday: "", recommend: "", url: safeUrl(o["得意先URL"]), note: "", pos: null,
   };
 }
@@ -551,6 +566,7 @@ function fromPublished(o, header) {
     tel: get("tel"), hours: get("hours"), holiday: get("holiday"), recommend: get("recommend"), url: safeUrl(get("url")), note: get("note"),
     course: get("course"), rep: get("rep"),
     status: get("status") === CLOSED ? CLOSED : "", closedDate: toIsoDate(get("closedDate")), lastShip: toIsoDate(get("lastShip")),
+    source: get("source") === MANUAL ? MANUAL : "",
     pos: Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null,
   };
 }
@@ -631,8 +647,11 @@ function lastShipOf(s) {
   const p = state.products.get(s.code)?.[0]?.last || "";
   return p > (s.lastShip || "") ? p : (s.lastShip || "");
 }
+// 地図で手動登録した地点（自社拠点など。得意先マスタに無くても残す）
+const MANUAL = "手動";
+const isManual = (s) => s.source === MANUAL;
 function isStale(s) {
-  if (isClosed(s) || !state.staleCutoff) return false;
+  if (isClosed(s) || isManual(s) || !state.staleCutoff) return false;   // 手動登録の地点は出荷と関係ないので対象外
   const last = lastShipOf(s);
   return last ? last <= state.staleCutoff : state.coverageFull;
 }
@@ -660,7 +679,7 @@ function productsTable(rows) {
   return [["得意先コード", "商品名", "出荷日", "数量"], ...rows.map((r) => [r.code, r.name, r.date, String(r.qty)])];
 }
 function productBlock(s) {
-  if (!CONFIG.productMonths || !state.productRange) return "";
+  if (!CONFIG.productMonths || !state.productRange || isManual(s)) return "";
   const list = state.products.get(s.code) || [];
   const { from, to } = state.productRange;
   return `<div class="internal"><div class="cap">使用中の商品（直近${CONFIG.productMonths}ヶ月：${shortDate(from)}〜${shortDate(to)} 出荷分）</div>
@@ -828,6 +847,7 @@ function renderChips() {
 
 /* ===================== 詳細 ===================== */
 function openDetail(s, move = true) {
+  removeFormMarker();
   if (state.sel && markers.get(state.sel)) markers.get(state.sel).setIcon(pinIcon(state.sel, false));
   state.sel = s;
   const m = markers.get(s);
@@ -864,7 +884,7 @@ function openDetail(s, move = true) {
       ${row("link", s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url.replace(/^https?:\/\//, ""))}</a>` : "")}
     </div>
     ${CONFIG.internalFields.length ? `<div class="internal"><div class="cap">社内情報</div><div class="rows">
-      ${row("tag", esc(s.code), "得意先コード")}${CONFIG.internalFields.map((k) => row(INTERNAL[k].icon, esc(s[k]), INTERNAL[k].label)).join("")}
+      ${isManual(s) ? row("tag", "地図で手動登録", "登録元") : row("tag", esc(s.code), "得意先コード")}${CONFIG.internalFields.map((k) => row(INTERNAL[k].icon, esc(s[k]), INTERNAL[k].label)).join("")}
       ${row("clock", fullDate(lastShipOf(s)), "最終出荷日")}
     </div></div>` : ""}
     ${productBlock(s)}
@@ -879,6 +899,7 @@ function openDetail(s, move = true) {
   };
 }
 function showList() {
+  removeFormMarker();
   if (state.sel && markers.get(state.sel)) markers.get(state.sel).setIcon(pinIcon(state.sel, false));
   state.sel = null;
   $("detailview").hidden = true; $("listview").hidden = false;
@@ -959,6 +980,10 @@ async function importFile(file) {
       for (const k of ["hours", "holiday", "recommend", "url", "note", "status", "closedDate", "lastShip"]) if (!s[k] && p[k]) s[k] = p[k];
       if (!s.pos && p.pos && p.address === s.address) { s.pos = p.pos; kept++; }
     }
+    // 地図で手動登録した地点（自社拠点など）は、得意先マスタに無くても残す
+    const codes = new Set(stores.map((s) => s.code));
+    const manual = state.published.filter((p) => isManual(p) && !codes.has(p.code));
+    stores.push(...manual);
     prog.hidden = false; prog.value = 0;
     const total = stores.filter((s) => !s.pos && s.geoAddress).length;
     prog.max = Math.max(total, 1);
@@ -970,8 +995,10 @@ async function importFile(file) {
     setPending("stores", storesTable(stores));
     setStores(stores); showList();
     const nClosed = stores.filter(isClosed).length;
-    const skipped = isMaster ? objs.filter((o) => o["得意先名1"]).length - stores.length : 0;
-    msg.innerHTML = `「${esc(file.name)}」から 取引中 <b>${stores.length - nClosed} 店舗</b>・終了 <b>${nClosed} 店舗</b>を取り込みました（この画面だけの確認表示です）。` +
+    const imported = stores.length - manual.length;
+    const skipped = isMaster ? objs.filter((o) => o["得意先名1"]).length - imported : 0;
+    msg.innerHTML = `「${esc(file.name)}」から 取引中 <b>${imported - nClosed} 店舗</b>・終了 <b>${nClosed} 店舗</b>を取り込みました（この画面だけの確認表示です）。` +
+      (manual.length ? `<br>地図で手動登録した地点 ${manual.length} 件はそのまま残しました。` : "") +
       (skipped ? `<br>本部・催事など地図に載せない ${skipped} 件は除外しました。` : "") +
       (failed.length ? `<br><span class="err">位置が分からなかった店舗：${failed.map((s) => esc(s.name)).join("、")}。保存したデータの緯度・経度を直接入力してください。</span>` : "");
   } catch (e) {
@@ -1051,6 +1078,13 @@ async function savePending() {
 
 /* 管理者：店舗の詳細から「終了店舗」に登録・取り消し（すぐサーバーに保存） */
 function adminBox(s) {
+  if (isManual(s)) {   // 手動登録の地点：編集・削除
+    return `<div class="adminbox"><div class="cap2">管理者メニュー（地図で手動登録した地点）</div>
+      <div class="row2"><button type="button" class="btn ghost" id="editPlace">編集</button><button type="button" class="btn ghost" id="deletePlace">削除</button></div>
+      <div id="deleteConfirm" hidden>「${esc(s.name)}」を削除します。元に戻せません。
+        <div class="row2" style="margin-top:8px"><button type="button" class="btn danger" id="deleteYes">削除する</button><button type="button" class="btn ghost" id="deleteNo">やめる</button></div></div>
+    </div>`;
+  }
   return `<div class="adminbox"><div class="cap2">管理者メニュー</div>
     ${isClosed(s)
       ? `<div>終了店舗として登録されています。取引を再開したら元に戻せます。</div>
@@ -1072,7 +1106,88 @@ function wireAdminBox(s) {
   $("closeNo")?.addEventListener("click", () => { $("closeConfirm").hidden = true; $("closeShop").hidden = false; });
   $("closeYes")?.addEventListener("click", () => setStatus(CLOSED));
   $("reopenShop")?.addEventListener("click", () => setStatus(""));
+  $("editPlace")?.addEventListener("click", () => openPlaceForm(s));
+  $("deletePlace")?.addEventListener("click", () => { $("deleteConfirm").hidden = false; });
+  $("deleteNo")?.addEventListener("click", () => { $("deleteConfirm").hidden = true; });
+  $("deleteYes")?.addEventListener("click", () => {
+    const rest = allStores().filter((x) => x !== s);
+    setStores(rest); showList();
+    setPending("stores", storesTable(allStores()));
+    savePending();
+  });
 }
+
+/* 管理者：地点を手動で登録・編集（得意先以外の自社拠点なども。必須は名前だけ）
+   位置は地図上のピンをドラッグして決める。住所を入れるとピンがその場所へ動く */
+const PLACE_TYPES = ["自社拠点", "その他"];
+let formMarker = null;
+const removeFormMarker = () => { formMarker?.remove(); formMarker = null; };
+const prefOf = (addr) => { const m = addr.match(/^(.{2,3}?)[都道府県]/); return m ? (m[0] === "北海道" ? "北海道" : m[1]) : ""; };
+
+function openPlaceForm(s) {
+  removeFormMarker();
+  if (state.sel && markers.get(state.sel)) markers.get(state.sel).setIcon(pinIcon(state.sel, false));
+  const types = [...new Set([...PLACE_TYPES, ...state.stores.map((x) => x.type).filter(Boolean)])];
+  const v = (k) => esc(s?.[k] || "");
+  $("detailview").innerHTML = `
+    <div class="dhead"><button class="iconbtn" id="pfBack" type="button" aria-label="やめる">${icon("back")}</button><b>${s ? "地点を編集" : "地点を追加"}</b></div>
+    <form class="pform" id="pform" novalidate>
+      <label><span>名前<span class="req">必須</span></span><input id="pf-name" value="${v("name")}" placeholder="例：本社、第二工場" required></label>
+      <label>種類<select id="pf-type">${types.map((t) => `<option${(s ? s.type === t : t === PLACE_TYPES[0]) ? " selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
+      <label>住所<span class="hint">入れるとピンがその場所へ動きます</span>
+        <div class="row2"><input id="pf-address" value="${v("address")}" placeholder="例：京都府京都市南区…"><button type="button" class="btn ghost" id="pf-find">探す</button></div></label>
+      <p class="hint" id="pf-poshint">地図のピンをドラッグして位置を決めてください（住所がなくても登録できます）</p>
+      <label>電話番号<input id="pf-tel" value="${v("tel")}" inputmode="tel"></label>
+      <label>営業時間<input id="pf-hours" value="${v("hours")}"></label>
+      <label>URL<input id="pf-url" value="${v("url")}" inputmode="url" placeholder="https://"></label>
+      <div class="err" id="pf-err"></div>
+      <div class="row2"><button type="submit" class="btn">保存</button><button type="button" class="btn ghost" id="pfCancel">やめる</button></div>
+    </form>`;
+  $("listview").hidden = true; $("detailview").hidden = false; $("detailview").scrollTop = 0;
+  document.body.classList.remove("collapsed");
+
+  // 位置を決めるピン（ドラッグできる）。編集なら今の位置、新規なら地図の真ん中
+  const start = s?.pos || [map.getCenter().lat, map.getCenter().lng];
+  formMarker = L.marker(start, { draggable: true, autoPan: true, zIndexOffset: 2000,
+    icon: pinIcon({ type: $("pf-type").value, source: MANUAL }, true) }).addTo(map);
+  if (s?.pos) map.setView(s.pos, Math.max(map.getZoom(), 16));
+  $("pf-type").onchange = () => formMarker.setIcon(pinIcon({ type: $("pf-type").value, source: MANUAL }, true));
+
+  const find = async () => {
+    const addr = clean($("pf-address").value);
+    if (!addr) return;
+    $("pf-poshint").textContent = "住所から位置を探しています…";
+    let pos = null;
+    try { pos = await geocode(geoKey(addr)); } catch {}
+    if (pos) { formMarker.setLatLng(pos); map.setView(pos, 17); $("pf-poshint").textContent = "ピンを住所の場所へ動かしました。ずれていればドラッグで直してください"; }
+    else $("pf-poshint").textContent = "住所から位置が見つかりませんでした。地図のピンをドラッグして位置を決めてください";
+  };
+  $("pf-find").onclick = find;
+  $("pf-address").onchange = find;
+  const close = () => { removeFormMarker(); if (s) openDetail(s, false); else showList(); };
+  $("pfBack").onclick = close;
+  $("pfCancel").onclick = close;
+
+  $("pform").onsubmit = (e) => {
+    e.preventDefault();
+    const name = clean($("pf-name").value);
+    if (!name) { $("pf-err").textContent = "名前を入れてください"; $("pf-name").focus(); return; }
+    const ll = formMarker.getLatLng();
+    const address = clean($("pf-address").value);
+    const rec = s || { code: "M" + Date.now().toString(36).toUpperCase(), status: "", closedDate: "", lastShip: "",
+      course: "", rep: "", holiday: "", recommend: "", note: "", source: MANUAL };
+    Object.assign(rec, { name, type: $("pf-type").value, address, geoAddress: geoKey(address), area: prefOf(address),
+      tel: toHalf($("pf-tel").value), hours: clean($("pf-hours").value), url: safeUrl(clean($("pf-url").value)),
+      pos: [+ll.lat.toFixed(6), +ll.lng.toFixed(6)] });
+    removeFormMarker();
+    setStores(s ? allStores() : allStores().concat(rec));
+    openDetail(rec);
+    setPending("stores", storesTable(allStores()));
+    savePending();
+  };
+  $("pf-name").focus();
+}
+$("addPlace").onclick = () => openPlaceForm(null);
 $("drop").onclick = () => $("file").click();
 $("drop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
 $("file").onchange = (e) => { if (e.target.files[0]) importFile(e.target.files[0]); e.target.value = ""; };
