@@ -165,6 +165,13 @@ button.pname:hover { text-decoration: underline; }
 .pmeta { color: var(--sub); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pmeta .sep { margin: 0 4px; }
 .noprod { margin: 0; padding: 8px 24px 14px; color: var(--sub); font-size: 13px; }
+.prods li .pmeta { margin-left: auto; }
+.pdel { border: 1px solid var(--line); background: #fff; color: var(--sub); border-radius: 12px; font-size: 11px; padding: 1px 8px; flex: none; }
+.pdel:hover { color: var(--red); border-color: var(--red); }
+.padd { display: flex; gap: 8px; padding: 4px 24px 6px; }
+.padd input { flex: 1; min-width: 0; height: 36px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; font-size: 14px; }
+.padd .btn { white-space: nowrap; }
+.pnote2 { margin: 0; padding: 0 24px 12px; color: var(--sub); font-size: 11px; }
 
 /* ---- 管理者 ---- */
 #admin { margin: 12px 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
@@ -634,36 +641,54 @@ function fromSales(objs, preamble) {
   const dates = rows.map((r) => r.date).sort();
   return { rows, from: range?.[0] || dates[0], to: range?.[1] || dates.at(-1) };
 }
+// 管理者が地図で編集した使用商品：「手動」＝手で追加（3ヶ月で消えない）、「非表示」＝その日までの出荷分を一覧から外す
+const P_MANUAL = "手動", P_HIDDEN = "非表示";
 function fromProductsCsv(objs) {
-  return objs.map((o) => ({ code: o["得意先コード"], name: clean(o["商品名"]), date: toIsoDate(o["出荷日"]), qty: parseFloat(o["数量"]) || 0 }))
+  return objs.map((o) => ({ code: o["得意先コード"], name: clean(o["商品名"]), date: toIsoDate(o["出荷日"]), qty: parseFloat(o["数量"]) || 0,
+    source: [P_MANUAL, P_HIDDEN].includes(clean(o["登録元"])) ? clean(o["登録元"]) : "" }))
     .filter((r) => r.code && r.name && r.date);
 }
 function mergeSales(old, add) {
-  const kept = old.filter((r) => r.date < add.from || r.date > add.to);   // 取り込む期間の分は新しいファイルで置き換え
+  // 取り込む期間の出荷分は新しいファイルで置き換え（地図で編集した行はそのまま残す）
+  const kept = old.filter((r) => r.source || r.date < add.from || r.date > add.to);
   return pruneSales(kept.concat(add.rows));
 }
 function pruneSales(rows) {
-  const latest = rows.reduce((m, r) => r.date > m ? r.date : m, "");
+  const ship = rows.filter((r) => !r.source);
+  const latest = ship.reduce((m, r) => r.date > m ? r.date : m, "");
   const cutoff = latest ? monthsBefore(latest, CONFIG.productMonths) : "";
-  return rows.filter((r) => r.date > cutoff && r.qty > 0 && !CONFIG.productExclude.some((w) => r.name.includes(w)))
+  return rows.filter((r) => r.source || (r.date > cutoff && r.qty > 0 && !CONFIG.productExclude.some((w) => r.name.includes(w))))
     .sort((a, b) => a.code.localeCompare(b.code) || b.date.localeCompare(a.date) || a.name.localeCompare(b.name));
 }
-/* 店舗ごとに「商品・最終出荷日・期間の合計数量」へまとめる */
+/* 店舗ごとに「商品・最終出荷日・期間の合計数量」へまとめる。手で追加した商品は末尾に、外した商品は除く */
 function setSales(rows) {
   state.sales = rows;
   state.products = new Map();
+  const listOf = (code) => state.products.get(code) || (state.products.set(code, new Map()), state.products.get(code));
+  const ship = rows.filter((r) => !r.source);
+  // 外した商品：外した日までの出荷分は数えない（その後また出荷があれば、その分だけで再び表示）
+  const hiddenUntil = new Map();
+  for (const r of rows.filter((x) => x.source === P_HIDDEN)) {
+    const k = r.code + "\t" + r.name;
+    if (!hiddenUntil.has(k) || r.date > hiddenUntil.get(k)) hiddenUntil.set(k, r.date);
+  }
   let latest = "";
-  for (const r of rows) {
+  for (const r of ship) {
     if (r.date > latest) latest = r.date;
-    const list = state.products.get(r.code) || (state.products.set(r.code, new Map()), state.products.get(r.code));
+    if (r.date <= (hiddenUntil.get(r.code + "\t" + r.name) || "")) continue;
+    const list = listOf(r.code);
     const p = list.get(r.name) || { name: r.name, last: "", qty: 0 };
     p.qty += r.qty; if (r.date > p.last) p.last = r.date;
     list.set(r.name, p);
   }
+  for (const r of rows.filter((x) => x.source === P_MANUAL)) {
+    const list = listOf(r.code);
+    if (!list.has(r.name)) list.set(r.name, { name: r.name, last: "", qty: 0, manual: true });
+  }
   for (const [code, m] of state.products) state.products.set(code, [...m.values()].sort((a, b) => b.last.localeCompare(a.last) || b.qty - a.qty));
   state.productRange = latest ? { from: monthsBefore(latest, CONFIG.productMonths), to: latest } : null;
   // 取り込んだ出荷データが要確認の判定期間を満たしているか（満たすまでは「記録なし」を要確認にしない）
-  const earliest = rows.reduce((m, r) => !m || r.date < m ? r.date : m, "");
+  const earliest = ship.reduce((m, r) => !m || r.date < m ? r.date : m, "");
   state.staleCutoff = latest ? monthsBefore(latest, CONFIG.staleMonths) : "";
   state.coverageFull = !!earliest && earliest <= addDays(state.staleCutoff, 14);
 }
@@ -677,7 +702,7 @@ const allStores = () => state.stores.concat(state.unplaced || []);
 const closedText = (s) => "終了店舗" + (s.closedDate ? `（${fullDate(s.closedDate)} 登録）` : "（得意先マスタで終了）");
 // 最終出荷日：店舗データに記録した日と、手元の出荷データの新しい方
 function lastShipOf(s) {
-  const p = state.products.get(s.code)?.[0]?.last || "";
+  const p = (state.products.get(s.code) || []).reduce((m, x) => x.last > m ? x.last : m, "");
   return p > (s.lastShip || "") ? p : (s.lastShip || "");
 }
 // 地図で手動登録した地点（自社拠点など。得意先マスタに無くても残す）
@@ -709,15 +734,49 @@ function refreshAll() {
   if (state.sel && !$("detailview").hidden) openDetail(state.sel, false);
 }
 function productsTable(rows) {
-  return [["得意先コード", "商品名", "出荷日", "数量"], ...rows.map((r) => [r.code, r.name, r.date, String(r.qty)])];
+  return [["得意先コード", "商品名", "出荷日", "数量", "登録元"], ...rows.map((r) => [r.code, r.name, r.date, String(r.qty), r.source || ""])];
 }
+const productMeta = (p) => p.manual ? "手動で追加" : `最終 ${shortDate(p.last)}<span class="sep">·</span>数量 ${p.qty.toLocaleString()}`;
 function productBlock(s) {
-  if (!CONFIG.productMonths || !state.productRange || isManual(s)) return "";
+  // 自社拠点など得意先でない地点には出さない
+  if (!CONFIG.productMonths || (isManual(s) && PLACE_TYPES.includes(s.type))) return "";
   const list = state.products.get(s.code) || [];
-  const { from, to } = state.productRange;
-  return `<div class="internal"><div class="cap">使用中の商品（直近${CONFIG.productMonths}ヶ月：${shortDate(from)}〜${shortDate(to)} 出荷分）</div>
-    ${list.length ? `<ul class="prods">${list.map((p) => `<li><button type="button" class="pname" data-prod="${esc(p.name)}" title="この商品を使っている店舗を表示">${esc(p.name)}</button><span class="pmeta">最終 ${shortDate(p.last)}<span class="sep">·</span>数量 ${p.qty.toLocaleString()}</span></li>`).join("")}</ul>`
-      : `<p class="noprod">この期間の出荷はありません</p>`}</div>`;
+  if (!state.productRange && !list.length && !isAdmin) return "";
+  const range = state.productRange ? `：${shortDate(state.productRange.from)}〜${shortDate(state.productRange.to)} 出荷分` : "";
+  const known = [...new Set([...state.products.values()].flat().map((p) => p.name))].sort();
+  return `<div class="internal"><div class="cap">使用中の商品（直近${CONFIG.productMonths}ヶ月${range}）</div>
+    ${list.length ? `<ul class="prods">${list.map((p) => `<li><button type="button" class="pname" data-prod="${esc(p.name)}" title="この商品を使っている店舗を表示">${esc(p.name)}</button><span class="pmeta">${productMeta(p)}</span>${
+      isAdmin ? `<button type="button" class="pdel" data-del="${esc(p.name)}" title="この店の一覧から外す">外す</button>` : ""}</li>`).join("")}</ul>`
+      : `<p class="noprod">この期間の出荷はありません</p>`}
+    ${isAdmin ? `<div class="padd"><input id="padd-name" list="padd-list" placeholder="商品名を選ぶか入力"><datalist id="padd-list">${known.map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
+      <button type="button" class="btn ghost" id="padd-btn">＋ 商品を追加</button></div>
+      <p class="pnote2">「外す」はその日までの出荷分を一覧から外します（その後また出荷があれば再び表示）。手で追加した商品は3ヶ月たっても消えません。</p>` : ""}
+  </div>`;
+}
+/* 管理者：店舗の使用商品を手で追加・外す（すぐサーバーに保存） */
+function wireProductEdit(s) {
+  const save = () => {
+    setSales(state.sales.slice());
+    refreshAll();
+    setPending("products", productsTable(state.sales));
+    savePending();
+  };
+  $("detailview").querySelectorAll("[data-del]").forEach((b) => b.onclick = () => {
+    const name = b.dataset.del, p = productOf(s, name);
+    if (p?.manual) state.sales = state.sales.filter((r) => !(r.code === s.code && r.name === name && r.source === P_MANUAL));
+    else state.sales.push({ code: s.code, name, date: p?.last || todayIso(), qty: 0, source: P_HIDDEN });
+    save();
+  });
+  const add = () => {
+    const name = clean($("padd-name").value);
+    if (!name) return $("padd-name").focus();
+    if (productOf(s, name)) return toast("その商品はすでに一覧にあります");
+    // 前に外していた商品を追加し直したときは、外した記録を消す
+    state.sales = state.sales.filter((r) => !(r.code === s.code && r.name === name && r.source === P_HIDDEN));
+    if (!productOf(s, name)) state.sales.push({ code: s.code, name, date: todayIso(), qty: 0, source: P_MANUAL });
+    save();
+  };
+  if ($("padd-btn")) { $("padd-btn").onclick = add; $("padd-name").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }; }
 }
 
 /* ===================== 住所 → 緯度経度（国土地理院 住所検索） ===================== */
@@ -804,7 +863,7 @@ async function copyContacts() {
   const cell = (v) => String(v ?? "").replace(/[\t\r\n]+/g, " ");
   const rows = [["店名", "電話番号", "住所", ...(course ? ["配送コース"] : []), "最終出荷日", "数量"],
     ...list.map((s) => { const p = productOf(s, state.product);
-      return [s.name, s.tel, s.address, ...(course ? [s.course] : []), fullDate(p.last), p.qty]; })];
+      return [s.name, s.tel, s.address, ...(course ? [s.course] : []), p.manual ? "手動で追加" : fullDate(p.last), p.manual ? "" : p.qty]; })];
   const text = `${state.product} を使っている店舗（${list.length} 店）\n` + rows.map((r) => r.map(cell).join("\t")).join("\n");
   try { await navigator.clipboard.writeText(text); toast(`${list.length} 店舗の連絡先をコピーしました`); }
   catch { toast("コピーできませんでした。ブラウザの設定を確認してください"); }
@@ -831,7 +890,7 @@ function applyFilter(fit) {
         ${isClosed(s) ? `<div class="meta">${esc(closedText(s))}</div>` : ""}
         <div class="meta"><span style="color:${pinColor(s)}">●</span> ${esc(s.type || "店舗")}${s.area ? `<span class="sep">·</span>${esc(s.area)}` : ""}${s.km != null ? `<span class="sep">·</span><span class="dist">${distText(s.km)}</span>` : ""}</div>
         <div class="addr">${esc(s.address)}</div>
-        ${state.product && productOf(s, state.product) ? `<div class="pline">${icon("tag")}最終出荷 ${shortDate(productOf(s, state.product).last)}<span class="sep">·</span>数量 ${productOf(s, state.product).qty.toLocaleString()}</div>` : ""}
+        ${state.product && productOf(s, state.product) ? `<div class="pline">${icon("tag")}${productOf(s, state.product).manual ? "手動で追加" : `最終出荷 ${shortDate(productOf(s, state.product).last)}<span class="sep">·</span>数量 ${productOf(s, state.product).qty.toLocaleString()}`}</div>` : ""}
         ${CONFIG.internalFields.map((k) => s[k] ? `<div class="meta inline">${icon(INTERNAL[k].icon)}${esc(s[k])}</div>` : "").join("")}
         ${s.note ? `<div class="closed">${esc(s.note)}</div>` : ""}
       </div>
@@ -929,6 +988,7 @@ function openDetail(s, move = true) {
     ${productBlock(s)}
     ${isAdmin ? adminBox(s) : ""}`;
   wireAdminBox(s);
+  if (isAdmin) wireProductEdit(s);
   $("detailview").querySelectorAll("[data-prod]").forEach((b) => b.onclick = () => selectProduct(b.dataset.prod));
   $("listview").hidden = true; $("detailview").hidden = false; $("detailview").scrollTop = 0;
   $("back").onclick = showList;
