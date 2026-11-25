@@ -425,7 +425,7 @@ baseLayers.map.addTo(map);
 const VECTOR_STYLE = "https://gsi-cyberjapan.github.io/optimal_bvmap/style/std.json";
 const VECTOR_TILES = "https://cyberjapandata.gsi.go.jp/xyz/optimal_bvmap-v1/{z}/{x}/{y}.pbf";
 const LAND = "#f5f3ef", WATER = "#aadaff", LABEL = "#5f6368";
-const DROP_LAYERS = ["BldA", "Cntr", "Isbt", "TpgphLine", "WStrL", "WStrA", "WRltLine", "SpcfArea",
+const DROP_LAYERS = ["Cntr", "Isbt", "TpgphLine", "WStrL", "WStrA", "WRltLine", "SpcfArea",
   "StrctArea", "StrctLine", "PwrTrnsmL", "RdEdg", "RdCompt", "RailTrCL"];
 
 function simplifyStyle(st) {
@@ -434,7 +434,7 @@ function simplifyStyle(st) {
     const sl = l["source-layer"];
     if (DROP_LAYERS.includes(sl)) return false;
     if (sl === "AdmBdry" && !l.id.includes("都府県界")) return false;         // 市区町村界などの細かい境界
-    if (sl === "Anno" && l.layout?.["icon-image"]) return false;               // 寺・学校・郵便局などの記号、道路番号
+    if (sl === "Anno" && l.id.includes("道路番号")) return false;               // 道路番号
     if (sl === "RailCL" && /ククリ|旗竿/.test(l.id)) return false;            // 鉄道の白黒の縁取り
     return true;
   });
@@ -446,6 +446,14 @@ function simplifyStyle(st) {
       if (l.maxzoom === 17) delete l.maxzoom;
       if (Array.isArray(l.filter) && l.filter[0] === "step" && JSON.stringify(l.filter[1]) === '["zoom"]') l.filter = l.filter[2];
     }
+    // 拡大したとき（ズーム15以上）は Google マップのように建物と、寺・学校・病院・郵便局などの記号を出す
+    if (sl === "BldA") {
+      l.minzoom = 15;
+      if (l.type === "fill") { p["fill-color"] = "#e8e9ed"; p["fill-opacity"] = ["interpolate", ["linear"], ["zoom"], 15, 0, 16, 1]; }
+      else { p["line-color"] = "#d4d6db"; p["line-width"] = 0.8; p["line-opacity"] = ["interpolate", ["linear"], ["zoom"], 15, 0, 16, 1]; }
+      continue;
+    }
+    if (sl === "Anno" && l.layout?.["icon-image"]) l.minzoom = Math.max(l.minzoom || 0, 15);
     if (l.type === "background") p["background-color"] = ["step", ["zoom"], LAND, 4, WATER, 8, LAND];
     else if (sl === "AdmArea") p["fill-color"] = LAND;
     else if (sl === "WA") p["fill-color"] = WATER;
@@ -556,7 +564,10 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const toHalf = (s) => String(s ?? "").replace(/[０-９．－＋]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).trim();
 const clean = (s) => String(s ?? "").replace(/　/g, " ").replace(/\s+/g, " ").trim();
 const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : "";
-const routeUrl = (s) => `https://www.google.com/maps/dir/?api=1&destination=${s.pos[0]},${s.pos[1]}`;
+// ルート：得意先は「店名＋住所」で Google マップに渡す。Google に載っている店ならその店（入口）へ、載っていなければ住所へ案内される。
+// 自社拠点など手動登録の地点や、住所のない店はピンの位置へ
+const routeUrl = (s) => `https://www.google.com/maps/dir/?api=1&destination=` +
+  (!isManual(s) && s.address ? encodeURIComponent(`${s.name} ${s.address.split(" ")[0]}`) : `${s.pos[0]},${s.pos[1]}`);
 const distText = (km) => km < 1 ? Math.round(km * 1000) + " m" : km.toFixed(1) + " km";
 
 function toast(msg) {
