@@ -306,6 +306,7 @@ body:not(.collapsed) .leaflet-bottom.leaflet-left { left: var(--panel-w); }
         <p><b>店舗の更新</b>：得意先マスタ（Excel または CSV）をドロップ。終了・本部・催事は自動で除外し、住所から位置を割り出します。<br>
           <b>使用商品の更新（週1回）</b>：売上明細をドロップ。今までの分に追記し、直近3ヶ月より古い分は自動で消えます。</p>
         <button type="button" class="btn ghost" id="addPlace" title="自社拠点など、得意先以外の場所も登録できます">＋ 地点を追加</button>
+        <button type="button" class="btn ghost" id="refineGeo" hidden title="Google の住所検索で、ピンを建物の位置に合わせます">位置を正確にする</button>
         <div id="drop" tabindex="0" role="button">ここにファイルをドロップ<br>またはクリックして選択<br><small>（地図の上など、画面のどこに落としても取り込めます）</small></div>
         <input id="file" type="file" accept=".csv,.xlsx,.xls,text/csv" hidden>
         <progress id="prog" value="0" max="1" hidden></progress>
@@ -380,10 +381,10 @@ const FIELDS = {
   recommend: ["おすすめ"], url: ["URL"], note: ["お知らせ"], lat: ["緯度"], lng: ["経度"],
   course: ["配送コース"], rep: ["担当者"],
   status: ["状態"], closedDate: ["終了日"], lastShip: ["最終出荷日"], source: ["登録元"],
-  noCheck: ["出荷確認"], deleted: ["削除"],
+  noCheck: ["出荷確認"], deleted: ["削除"], geo: ["位置の出典"],
 };
 const OUT_COLS = ["code", "name", "type", "area", "address", "tel", "hours", "holiday", "recommend", "url", "note", "lat", "lng",
-  "status", "closedDate", "lastShip", "source", "noCheck", "deleted"]
+  "status", "closedDate", "lastShip", "source", "noCheck", "deleted", "geo"]
   .concat(CONFIG.internalFields);
 const INTERNAL = { course: { label: "配送コース", icon: "truck" }, rep: { label: "担当者", icon: "person" } };
 const showsInternal = (k) => CONFIG.internalFields.includes(k);
@@ -617,7 +618,7 @@ function fromMaster(o) {
     area: clean(o["得意先分類3名"]) || (a1.match(/^.{2,3}?[都道府県]/) || [""])[0],
     address: a1 + a2 + (a3 ? " " + a3 : ""), geoAddress: geoKey(a1 + a2),
     tel: toHalf(o["TEL"]), course: clean(o["配送コース名"]), rep: clean(o["担当者名"]),
-    status: closed ? CLOSED : "", closedDate: "", lastShip: "", source: "", noCheck: "", deleted: "",
+    status: closed ? CLOSED : "", closedDate: "", lastShip: "", source: "", noCheck: "", deleted: "", geo: "",
     hours: "", holiday: "", recommend: "", url: safeUrl(o["得意先URL"]), note: "", pos: null,
   };
 }
@@ -634,6 +635,7 @@ function fromPublished(o, header) {
     status: get("status") === CLOSED ? CLOSED : "", closedDate: toIsoDate(get("closedDate")), lastShip: toIsoDate(get("lastShip")),
     source: get("source") === MANUAL ? MANUAL : "", noCheck: get("noCheck") === NO_CHECK ? NO_CHECK : "",
     deleted: get("deleted") === DELETED ? DELETED : "",
+    geo: GEO_SOURCES.includes(get("geo")) ? get("geo") : "",
     pos: Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null,
   };
 }
@@ -855,6 +857,62 @@ async function resolvePositions(stores, onProgress) {
   const total = todo.length;
   await Promise.all([worker(), worker(), worker()]);
   return total;
+}
+
+/* ===================== 位置を Google の住所検索で正確にする（管理者） =====================
+   国土地理院の住所検索は番地の区画の中心を返すので、建物から数十mずれることがある。
+   サーバー（GAS の Maps サービス）で Google に問い合わせ、番地まで特定できた店だけピンを置き直す。
+   「位置の出典」列：Google＝Googleで補正済み／国土地理院＝Googleでも特定できず元のまま／手動＝地図でピンを動かした（上書きしない） */
+const GEO_GOOGLE = "Google", GEO_GSI = "国土地理院", GEO_MANUAL = "手動";
+const GEO_SOURCES = [GEO_GOOGLE, GEO_GSI, GEO_MANUAL];
+const geoTargets = () => allStores().filter((s) => !s.geo && !isClosed(s) && !isDeleted(s) && s.address);
+let refining = false, geoStopped = false;
+async function refinePositions() {
+  if (refining || !isAdmin || !API_URL) return;
+  const todo = geoTargets();
+  if (!todo.length) return updateRefineButton();
+  refining = true; updateRefineButton();
+  const prog = $("prog"), msg = $("adminmsg");
+  prog.hidden = false; prog.max = todo.length; prog.value = 0;
+  let moved = 0, kept = 0, quota = false, failed = "";
+  try {
+    for (let i = 0; i < todo.length && !quota; i += 40) {
+      const batch = todo.slice(i, i + 40);
+      const res = await call("geocodeAddresses", batch.map((s) => s.address.split(" ")[0]));
+      batch.forEach((s, j) => {
+        const r = res.results[j];
+        if (!r) return;   // 1日の上限で問い合わせられなかった
+        if (r.ok) { s.pos = [+r.lat.toFixed(6), +r.lng.toFixed(6)]; s.geo = GEO_GOOGLE; moved++; }
+        else { s.geo = GEO_GSI; kept++; }
+      });
+      quota = res.quota;
+      prog.value = Math.min(i + 40, todo.length);
+      msg.textContent = `Google で位置を確認しています… ${prog.value} / ${todo.length}`;
+    }
+  } catch (e) { failed = e.message; }
+  prog.hidden = true;
+  if (moved || kept) {
+    setStores(allStores());
+    setPending("stores", storesTable(allStores()));
+    await savePending();
+  }
+  refining = false;
+  geoStopped = quota || !!failed;   // 上限・エラーのときは、このページを開き直すまで自動では再開しない
+  msg.innerHTML = `Google で位置を確認しました：<b>${moved} 店</b>のピンを正確な位置に直しました` +
+    (kept ? `（番地まで分からなかった ${kept} 店は今の位置のまま）` : "") + "。" +
+    (quota ? `<br><span class="err">Google の1日の上限に達したので途中で止めました。残り ${geoTargets().length} 店は、明日以降に「位置を正確にする」を押すと続きから直します。</span>` : "") +
+    (failed ? `<br><span class="err">途中で止まりました：${esc(failed)}</span>` : "");
+  updateRefineButton();
+}
+// 管理者用 URL を開いたとき・店舗を保存したときに、まだ Google で確認していない店があれば自動で直す（未保存の取り込みがあるときは待つ）
+function autoRefine() {
+  if (isAdmin && API_URL && state.published.length && !refining && !geoStopped && !Object.keys(state.pending).length && geoTargets().length) refinePositions();
+}
+function updateRefineButton() {
+  const n = isAdmin && API_URL ? geoTargets().length : 0;
+  $("refineGeo").hidden = !n && !refining;
+  $("refineGeo").disabled = refining;
+  $("refineGeo").textContent = refining ? "Google で位置を確認中…" : `位置を正確にする（Google・残り ${n} 店）`;
 }
 
 /* ===================== 一覧・ピン ===================== */
@@ -1117,7 +1175,7 @@ async function syncAdmin() {
     catch (e) { toast(e.message); }
   }
   $("admin").hidden = !isAdmin;
-  renderChips(); applyFilter(false);
+  renderChips(); applyFilter(false); updateRefineButton(); autoRefine();
   if (state.sel && !$("detailview").hidden) openDetail(state.sel, false);
 }
 addEventListener("hashchange", syncAdmin);
@@ -1143,7 +1201,7 @@ async function importFile(file) {
       if (!p) continue;
       // 手入力の項目と、地図で登録した「終了」・最終出荷日は、得意先マスタを取り込み直しても残す
       for (const k of ["hours", "holiday", "recommend", "url", "note", "status", "closedDate", "lastShip", "noCheck", "deleted"]) if (!s[k] && p[k]) s[k] = p[k];
-      if (!s.pos && p.pos && p.address === s.address) { s.pos = p.pos; kept++; }
+      if (!s.pos && p.pos && p.address === s.address) { s.pos = p.pos; s.geo = p.geo || ""; kept++; }
     }
     // 今サーバーにあるデータと比べて、何が増えた・変わった・消えたかをまとめる（結果の表示用）
     const diff = diffStores(state.published.filter((p) => !isManual(p)), stores);
@@ -1295,6 +1353,7 @@ async function savePending() {
       delete state.pending[k];
     }
     $("savename").textContent = "保存済み";
+    if (kinds.includes("stores")) setTimeout(autoRefine, 0);   // 得意先マスタを取り込んで保存したら、新しい店の位置も Google で直す
     $("unsaved").hidden = true;
     toast("保存しました。全員の地図に反映されます");
   } catch (e) {
@@ -1454,6 +1513,9 @@ function openPlaceForm(s) {
     const address = clean($("pf-address").value);
     const rec = s || { status: "", closedDate: "", lastShip: "", rep: "", source: MANUAL };
     const addressChanged = !s || (s.address || "") !== address;
+    // ピンを動かした（または新しく置いた）ときは「手動」にして、Google の補正で上書きしない
+    const pinMoved = !s?.pos || Math.abs(s.pos[0] - ll.lat) > 1e-6 || Math.abs(s.pos[1] - ll.lng) > 1e-6;
+    rec.geo = pinMoved ? GEO_MANUAL : addressChanged ? "" : (rec.geo || "");
     Object.assign(rec, { code, name, type: $("pf-type").value, address, geoAddress: geoKey(address),
       area: addressChanged ? (prefOf(address) || rec.area || "") : rec.area,
       tel: toHalf($("pf-tel").value), course: clean($("pf-course").value),
@@ -1469,6 +1531,7 @@ function openPlaceForm(s) {
   $("pf-name").focus();
 }
 $("addPlace").onclick = () => openPlaceForm(null);
+$("refineGeo").onclick = () => { geoStopped = false; refinePositions(); };
 $("drop").onclick = () => $("file").click();
 $("drop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
 $("file").onchange = (e) => { if (e.target.files[0]) importFile(e.target.files[0]); e.target.value = ""; };
@@ -1549,6 +1612,7 @@ async function start() {
     state.published = stores;
     if (CONFIG.productMonths && productsData) setSales(pruneSales(fromProductsCsv(productsData.objs)));
     setStores(stores);
+    autoRefine();
   } catch (e) {
     $("count").textContent = "店舗データを読み込めませんでした";
     $("list").innerHTML = `<li class="empty">${esc(e.message)}<br>管理者は URL の末尾に #admin を付けて開き、得意先マスタを取り込んでください。</li>`;
