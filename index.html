@@ -306,7 +306,7 @@ body:not(.collapsed) .leaflet-bottom.leaflet-left { left: var(--panel-w); }
         <p><b>店舗の更新</b>：得意先マスタ（Excel または CSV）をドロップ。終了・本部・催事は自動で除外し、住所から位置を割り出します。<br>
           <b>使用商品の更新（週1回）</b>：売上明細をドロップ。今までの分に追記し、直近3ヶ月より古い分は自動で消えます。</p>
         <button type="button" class="btn ghost" id="addPlace" title="自社拠点など、得意先以外の場所も登録できます">＋ 地点を追加</button>
-        <button type="button" class="btn ghost" id="refineGeo" hidden title="Google の住所検索で、ピンを建物の位置に合わせます">位置を正確にする</button>
+        <button type="button" class="btn ghost" id="refineGeo" hidden title="店名＋住所で Google に聞き、Google マップに載っているお店の位置にピンを合わせます">位置を正確にする</button>
         <div id="drop" tabindex="0" role="button">ここにファイルをドロップ<br>またはクリックして選択<br><small>（地図の上など、画面のどこに落としても取り込めます）</small></div>
         <input id="file" type="file" accept=".csv,.xlsx,.xls,text/csv" hidden>
         <progress id="prog" value="0" max="1" hidden></progress>
@@ -874,9 +874,13 @@ async function resolvePositions(stores, onProgress) {
    国土地理院の住所検索は番地の区画の中心を返すので、建物から数十mずれることがある。
    サーバー（GAS の Maps サービス）で Google に問い合わせ、番地まで特定できた店だけピンを置き直す。
    「位置の出典」列：Google＝Googleで補正済み／国土地理院＝Googleでも特定できず元のまま／手動＝地図でピンを動かした（上書きしない） */
+/* 今は「店名＋住所」で調べる：Google（店名）＝Google マップにお店として載っている位置／Google（住所）＝お店は見つからず番地の位置／
+   国土地理院（確認済み）＝どちらも分からず元のまま。古い「Google」「国土地理院」（住所だけで調べた分）は店名で調べ直す対象 */
 const GEO_GOOGLE = "Google", GEO_GSI = "国土地理院", GEO_MANUAL = "手動";
-const GEO_SOURCES = [GEO_GOOGLE, GEO_GSI, GEO_MANUAL];
-const geoTargets = () => allStores().filter((s) => !s.geo && !isClosed(s) && !isDeleted(s) && s.address);
+const GEO_SHOP = "Google（店名）", GEO_ADDR = "Google（住所）", GEO_NONE = "国土地理院（確認済み）";
+const GEO_SOURCES = [GEO_SHOP, GEO_ADDR, GEO_NONE, GEO_MANUAL, GEO_GOOGLE, GEO_GSI];
+const GEO_DONE = [GEO_SHOP, GEO_ADDR, GEO_NONE, GEO_MANUAL];
+const geoTargets = () => allStores().filter((s) => !GEO_DONE.includes(s.geo) && !isClosed(s) && !isDeleted(s) && s.address);
 let refining = false, geoStopped = false;
 async function refinePositions() {
   if (refining || !isAdmin || !API_URL) return;
@@ -887,17 +891,18 @@ async function refinePositions() {
   prog.hidden = false; prog.max = todo.length; prog.value = 0;
   let moved = 0, kept = 0, quota = false, failed = "";
   try {
-    for (let i = 0; i < todo.length && !quota; i += 40) {
-      const batch = todo.slice(i, i + 40);
-      const res = await call("geocodeAddresses", batch.map((s) => s.address.split(" ")[0]));
+    for (let i = 0; i < todo.length && !quota; i += 30) {
+      const batch = todo.slice(i, i + 30);
+      const res = await call("geocodeShops", batch.map((s) => [s.name, s.address.split(" ")[0]]));
       batch.forEach((s, j) => {
         const r = res.results[j];
         if (!r) return;   // 1日の上限で問い合わせられなかった
-        if (r.ok) { s.pos = [+r.lat.toFixed(6), +r.lng.toFixed(6)]; s.geo = GEO_GOOGLE; moved++; }
-        else { s.geo = GEO_GSI; kept++; }
+        if (r.src === "shop" || r.src === "addr") {
+          s.pos = [+r.lat.toFixed(6), +r.lng.toFixed(6)]; s.geo = r.src === "shop" ? GEO_SHOP : GEO_ADDR; moved++;
+        } else { s.geo = GEO_NONE; kept++; }
       });
       quota = res.quota;
-      prog.value = Math.min(i + 40, todo.length);
+      prog.value = Math.min(i + 30, todo.length);
       msg.textContent = `Google で位置を確認しています… ${prog.value} / ${todo.length}`;
     }
   } catch (e) { failed = e.message; }
@@ -910,7 +915,7 @@ async function refinePositions() {
   refining = false;
   geoStopped = quota || !!failed;   // 上限・エラーのときは、このページを開き直すまで自動では再開しない
   msg.innerHTML = `Google で位置を確認しました：<b>${moved} 店</b>のピンを正確な位置に直しました` +
-    (kept ? `（番地まで分からなかった ${kept} 店は今の位置のまま）` : "") + "。" +
+    (kept ? `（お店も番地も分からなかった ${kept} 店は今の位置のまま）` : "") + "。" +
     (quota ? `<br><span class="err">Google の1日の上限に達したので途中で止めました。残り ${geoTargets().length} 店は、明日以降に「位置を正確にする」を押すと続きから直します。</span>` : "") +
     (failed ? `<br><span class="err">途中で止まりました：${esc(failed)}</span>` : "");
   updateRefineButton();
@@ -1212,7 +1217,10 @@ async function importFile(file) {
       if (!p) continue;
       // 手入力の項目と、地図で登録した「終了」・最終出荷日は、得意先マスタを取り込み直しても残す
       for (const k of ["hours", "holiday", "recommend", "url", "note", "status", "closedDate", "lastShip", "noCheck", "deleted"]) if (!s[k] && p[k]) s[k] = p[k];
-      if (!s.pos && p.pos && p.address === s.address) { s.pos = p.pos; s.geo = p.geo || ""; kept++; }
+      if (!s.pos && p.pos && p.address === s.address) {
+        s.pos = p.pos; s.geo = p.geo || ""; kept++;
+        if (s.geo === GEO_SHOP && p.name !== s.name) s.geo = "";   // 店名が変わったら、新しい店名で調べ直す
+      }
     }
     // 今サーバーにあるデータと比べて、何が増えた・変わった・消えたかをまとめる（結果の表示用）
     const diff = diffStores(state.published.filter((p) => !isManual(p)), stores);
